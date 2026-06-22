@@ -69,4 +69,17 @@ mkdir -p "$tmp/st2"; echo "darker faster" > "$tmp/st2/steer"
 so="$("$here/radio.sh" "$tmp/st2" --max-segments 1 --cycles 1 2>&1 || true)"
 echo "$so" | grep -q "steer=darker faster" && chk "radio.sh re-reads the steer file + applies it" 1 || chk "radio.sh reads steer file" 0
 
-echo; [ "$fails" = 0 ] && { echo "PASS — radio: evolving, steerable, rolling-window, valid HLS, browser-playable"; exit 0; } || { echo "$fails FAILED"; exit 1; }
+# ── auto-seed by time of day (no manual steer): night → dark, midday → bright; steer overrides ──
+nm="$(RADIO_AUTOSEED=1 RADIO_HOUR=23 node "$here/radio-compose.mjs" 0 | grep -oE 'scale\("[^"]+"' | head -1)"
+echo "$nm" | grep -qE 'phrygian|aeolian|minor' && chk "auto-seed: late night → dark mode" 1 || chk "auto-seed: late night → dark mode" 0
+dm="$(RADIO_AUTOSEED=1 RADIO_HOUR=12 node "$here/radio-compose.mjs" 0 | grep -oE 'scale\("[^"]+"' | head -1)"
+echo "$dm" | grep -qE 'lydian|mixolydian|major|dorian' && chk "auto-seed: midday → bright mode" 1 || chk "auto-seed: midday → bright mode" 0
+ov="$(RADIO_AUTOSEED=1 RADIO_HOUR=23 RADIO_STEER=brighter node "$here/radio-compose.mjs" 0 | grep -oE 'scale\("[^"]+"' | head -1)"
+echo "$ov" | grep -qE 'lydian|mixolydian|major|dorian' && chk "auto-seed: a manual steer overrides the time-seed" 1 || chk "manual steer overrides auto-seed" 0
+RADIO_AUTOSEED=1 RADIO_HOUR=3 node "$here/radio-compose.mjs" 2 > "$tmp/seed.js"
+node "$here/render/render.mjs" "$(cat "$tmp/seed.js")" "$tmp/seed.wav" 1 >/dev/null 2>&1 && chk "auto-seeded segment still passes the parse-gate" 1 || chk "auto-seeded segment gates" 0
+# the BARE engine (no RADIO_AUTOSEED) stays time-independent → deterministic (existing checks rely on this)
+b1="$(node "$here/radio-compose.mjs" 1)"; b2="$(node "$here/radio-compose.mjs" 1)"
+[ "$b1" = "$b2" ] && chk "bare engine is time-independent (no auto-seed unless opted in)" 1 || chk "bare engine time-independent" 0
+
+echo; [ "$fails" = 0 ] && { echo "PASS — radio: evolving, steerable, time-seeded, rolling-window, valid HLS, browser-playable"; exit 0; } || { echo "$fails FAILED"; exit 1; }

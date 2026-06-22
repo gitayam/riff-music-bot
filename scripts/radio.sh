@@ -69,7 +69,7 @@ i=0
 while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
   # live steering: re-read <outdir>/steer each segment so an edit nudges the stream from the next one
   steer=""; [ -f "$outdir/steer" ] && steer="$(head -1 "$outdir/steer" 2>/dev/null | tr -d '\r\n')"
-  code="$(RADIO_STEER="$steer" node "$compose" "$i")"
+  code="$(RADIO_STEER="$steer" RADIO_AUTOSEED=1 node "$compose" "$i")"   # auto-seed by time of day; steer overrides
   # Each stage skips (not aborts) on failure — a continuous radio must not die on one bad segment.
   if ! node "$gate" "$code" "$work/g.wav" 1 >/dev/null 2>&1; then
     echo "[radio] seed $i failed the gate — skipping" >&2; i=$((i+1)); continue; fi

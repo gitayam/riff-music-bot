@@ -7,7 +7,21 @@
 // renders fully offline. radio.sh calls this per segment, re-reading <outdir>/steer each time.
 const idx = Math.max(0, parseInt(process.argv[2] || '0', 10) || 0);
 const steer = (process.env.RADIO_STEER || '').toLowerCase();
-const has = (...w) => w.some((x) => steer.includes(x));
+// auto-seed by time of day when there's no manual steer — a 24/7 radio should drift with the day.
+// Opt-in via RADIO_AUTOSEED (radio.sh sets it); a manual steer always overrides; RADIO_HOUR pins
+// the clock for tests. Kept opt-in so the bare engine stays time-independent (deterministic) for tests.
+function timeSeed(h) {
+  if (h >= 22 || h < 6) return 'darker chill';      // late night → dark + mellow
+  if (h < 9)            return 'brighter sparse';   // early morning → light + airy
+  if (h < 17)           return 'brighter';          // daytime → bright
+  return 'warm';                                     // evening → warm (bright-ish)
+}
+let effective = steer;
+if (!effective && process.env.RADIO_AUTOSEED) {
+  const h = process.env.RADIO_HOUR != null ? (parseInt(process.env.RADIO_HOUR, 10) || 0) : new Date().getHours();
+  effective = timeSeed(h);
+}
+const has = (...w) => w.some((x) => effective.includes(x));
 
 const DARK   = ['phrygian', 'aeolian', 'minor'];
 const BRIGHT = ['lydian', 'mixolydian', 'major', 'dorian'];
