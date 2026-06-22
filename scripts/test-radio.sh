@@ -24,4 +24,16 @@ audio=1; for ts in "$tmp/out"/seg*.ts; do
 done
 chk "each segment is real audio (ffprobe dur>0.5s)" "$audio"
 
-echo; [ "$fails" = 0 ] && { echo "PASS — generative radio produces a valid HLS stream"; exit 0; } || { echo "$fails FAILED"; exit 1; }
+# evolution engine (radio-compose.mjs): every segment must parse, and the set must actually vary.
+gate_ok=1
+for k in 0 1 2 3 4 5 6 7; do
+  c="$(node "$here/radio-compose.mjs" "$k" 2>/dev/null)"
+  node "$here/render/render.mjs" "$c" "$tmp/c.wav" 1 >/dev/null 2>&1 || gate_ok=0
+done
+chk "every evolved segment (idx 0-7) passes the parse-gate" "$gate_ok"
+distinct=$(for k in 0 1 2 3 4 5 6 7; do node "$here/radio-compose.mjs" "$k" 2>/dev/null | shasum | cut -d' ' -f1; done | sort -u | wc -l | tr -d ' ')
+[ "${distinct:-0}" -ge 5 ] && chk "stream evolves (≥5 distinct patterns / 8, got $distinct)" 1 || chk "stream evolves (≥5 distinct, got ${distinct:-0})" 0
+d1="$(node "$here/radio-compose.mjs" 3 2>/dev/null)"; d2="$(node "$here/radio-compose.mjs" 3 2>/dev/null)"
+[ "$d1" = "$d2" ] && chk "deterministic (same index → same pattern)" 1 || chk "deterministic (same index → same pattern)" 0
+
+echo; [ "$fails" = 0 ] && { echo "PASS — generative radio: evolving + valid HLS stream"; exit 0; } || { echo "$fails FAILED"; exit 1; }

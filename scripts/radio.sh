@@ -28,15 +28,10 @@ mkdir -p "$outdir"
 m3u8="$outdir/stream.m3u8"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 
-# Seed patterns (cycled). All use cached packs (909/808/dirt/piano) → segments render offline.
-seeds=(
-'setcpm(124/4)
-stack(sound("bd*4").bank("RolandTR909"), sound("~ cp ~ cp").bank("RolandTR909"), sound("hh*8").gain(0.4), note("c2 ~ eb2 g2").sound("sawtooth").lpf(800).gain(0.7))'
-'setcpm(85/4)
-stack(sound("bd ~ ~ bd ~ ~ bd ~").gain(0.9), sound("~ ~ sd ~").gain(0.7), sound("hh*8").gain(0.3), n("0 2 4 <6 5>").scale("A:minor").sound("piano").room(0.4).gain(0.5))'
-'setcpm(138/4)
-stack(sound("bd*4").bank("RolandTR808"), sound("hh*16").gain(0.3), sound("~ cp").bank("RolandTR808"), note("a1 a1 c2 e2").sound("sawtooth").lpf(sine.range(400,1800).slow(8)).gain(0.6))'
-)
+# Each segment's pattern comes from the evolution engine (radio-compose.mjs <index>), which walks
+# tempo/key/mode/kit/density deterministically so the stream continuously morphs. Cached kits only
+# (909/808/dirt/piano) → renders offline. (P1-next: derive from the *previous* segment + agent-gen.)
+compose="$here/radio-compose.mjs"
 
 # (Re)start the live playlist. No #EXT-X-ENDLIST while generating → players keep polling for more.
 { echo "#EXTM3U"; echo "#EXT-X-VERSION:3"; echo "#EXT-X-TARGETDURATION:30"; echo "#EXT-X-MEDIA-SEQUENCE:0"; } > "$m3u8"
@@ -44,7 +39,7 @@ echo "[radio] writing HLS to $m3u8 (cycles/seg=$cyc, max=$max [0=forever])" >&2
 
 i=0
 while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
-  code="${seeds[$(( i % ${#seeds[@]} ))]}"
+  code="$(node "$compose" "$i")"
   # Each stage skips (not aborts) on failure — a continuous radio must not die on one bad segment.
   if ! node "$gate" "$code" "$work/g.wav" 1 >/dev/null 2>&1; then
     echo "[radio] seed $i failed the gate — skipping" >&2; i=$((i+1)); continue; fi
