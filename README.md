@@ -64,6 +64,7 @@ You also need the **zeroclaw runtime** (the Rust binary) on your `PATH` — see
 [zeroclaw-labs/zeroclaw](https://github.com/zeroclaw-labs/zeroclaw).
 
 > 🎤 **Presenting / demoing it?** Follow the [**demo runbook**](docs/DEMO.md) — live script, backup plan, and what to emphasize.
+> 📊 **Pitch deck:** [`docs/slides.html`](docs/slides.html) — a self-contained slide deck (open in a browser; arrow keys / space to advance).
 
 ## Capabilities & services
 
