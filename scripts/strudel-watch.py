@@ -121,9 +121,24 @@ def save_state(s):
 
 def channels():
     env = os.environ.get("STRUDEL_WATCH_CHANNELS", "").strip()
-    if env: return [c.strip() for c in env.split(",") if c.strip()]
-    g = os.environ.get("DISCORD_GUILD_ID") or sys.exit("set STRUDEL_WATCH_CHANNELS or DISCORD_GUILD_ID")
-    return [c["id"] for c in api(f"/guilds/{g}/channels") if c.get("type") in (0, 5)]  # text + announcement
+    g = os.environ.get("DISCORD_GUILD_ID", "").strip()
+    if env:
+        base = [c.strip() for c in env.split(",") if c.strip()]
+    elif g:
+        base = [c["id"] for c in api(f"/guilds/{g}/channels") if c.get("type") in (0, 5)]  # text + announcement
+    else:
+        sys.exit("set STRUDEL_WATCH_CHANNELS or DISCORD_GUILD_ID")
+    # also watch ACTIVE threads in the guild — a reply posted in a thread otherwise never becomes a
+    # voice message (the watcher only saw top-level channels). Non-fatal if the endpoint fails.
+    if g:
+        try:
+            base += [t["id"] for t in (api(f"/guilds/{g}/threads/active") or {}).get("threads", [])]
+        except Exception:
+            pass
+    seen, out = set(), []
+    for c in base:
+        if c not in seen: seen.add(c); out.append(c)
+    return out
 
 def cycle(send):
     me = api("/users/@me"); bot_id = me["id"]
@@ -137,8 +152,18 @@ def cycle(send):
         except urllib.error.HTTPError as e:
             print(f"  ch {ch}: skip ({e.code})"); continue
         msgs = sorted(msgs, key=lambda m: int(m["id"]))            # oldest -> newest
-        if last is None:                                            # first sight: arm, don't replay history
-            if msgs: state[ch] = msgs[-1]["id"]
+        if last is None:                                            # first sight: don't replay the backlog,
+            # but DO deliver the most-recent stranded reply (so a fresh thread/channel for one request
+            # works) — arm just before it so the normal loop delivers it next cycle (idempotent, capped at 1).
+            if msgs:
+                arm = msgs[-1]["id"]
+                for i in range(len(msgs) - 1, -1, -1):
+                    mi = msgs[i]
+                    if (mi["author"]["id"] == bot_id and not (int(mi.get("flags", 0)) & 8192)
+                            and CODE_RE.search(mi.get("content", "")) and not already_delivered(msgs, i, bot_id)):
+                        if i > 0: arm = msgs[i - 1]["id"]
+                        break
+                state[ch] = arm
             continue
         for idx_m, m in enumerate(msgs):
             state[ch] = m["id"]

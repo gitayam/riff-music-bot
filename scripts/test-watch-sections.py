@@ -68,6 +68,14 @@ check("already_delivered: code-reply, no following voice ⇒ False (stranded)", 
 check("already_delivered: nothing after ⇒ False", sw.already_delivered([_m(B)], 0, B) is False)
 check("already_delivered: user chatter then voice ⇒ True", sw.already_delivered([_m(B), _m("u"), _m(B, voice=True)], 0, B) is True)
 
+# channels() also watches active threads (deduped) — a reply in a thread otherwise gets no audio
+os.environ["STRUDEL_WATCH_CHANNELS"] = "111,222"; os.environ["DISCORD_GUILD_ID"] = "g1"
+_orig_api = sw.api
+sw.api = lambda p, *a, **k: ({"threads": [{"id": "333"}, {"id": "222"}]} if "threads/active" in p else [])
+_ch = sw.channels()
+sw.api = _orig_api
+check("channels() merges active threads with the base channels, deduped", _ch == ["111", "222", "333"])
+
 # api(): a transient DNS/URLError blip is retried (not fatal — this is what wedged the watcher)
 import urllib.error
 _calls = {"n": 0}
