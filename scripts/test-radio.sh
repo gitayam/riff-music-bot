@@ -82,4 +82,12 @@ node "$here/render/render.mjs" "$(cat "$tmp/seed.js")" "$tmp/seed.wav" 1 >/dev/n
 b1="$(node "$here/radio-compose.mjs" 1)"; b2="$(node "$here/radio-compose.mjs" 1)"
 [ "$b1" = "$b2" ] && chk "bare engine is time-independent (no auto-seed unless opted in)" 1 || chk "bare engine time-independent" 0
 
-echo; [ "$fails" = 0 ] && { echo "PASS — radio: evolving, steerable, time-seeded, rolling-window, valid HLS, browser-playable"; exit 0; } || { echo "$fails FAILED"; exit 1; }
+# now-playing: radio-compose emits a meta line, radio.sh writes now.json, the player polls it
+nm="$(node "$here/radio-compose.mjs" 0 | sed -n 's|^// meta: ||p' | head -1)"
+echo "$nm" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert all(k in d for k in ("index","bpm","key","mode","kit"))' 2>/dev/null \
+  && chk "radio-compose emits valid now-playing meta JSON" 1 || chk "radio-compose emits valid meta JSON" 0
+{ [ -f "$tmp/w/now.json" ] && python3 -c 'import sys,json; json.load(open(sys.argv[1]))' "$tmp/w/now.json"; } 2>/dev/null \
+  && chk "radio.sh writes now.json (now-playing metadata)" 1 || chk "radio.sh writes now.json" 0
+grep -q 'now.json' "$here/radio.html" && chk "player polls now.json" 1 || chk "player polls now.json" 0
+
+echo; [ "$fails" = 0 ] && { echo "PASS — radio: evolving, steerable, time-seeded, now-playing, rolling-window, valid HLS"; exit 0; } || { echo "$fails FAILED"; exit 1; }

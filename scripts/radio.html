@@ -21,6 +21,7 @@
   .steer button{margin:0;padding:.4rem .7rem;font-size:.78rem;font-weight:600;border-radius:8px;
     background:#2a2238;color:var(--fg);border:1px solid #3a3150}
   .steer button.on{background:linear-gradient(135deg,var(--amber),var(--mag));color:#15131f;border-color:transparent}
+  .now{margin-top:1rem;font-size:.92rem;color:var(--fg);font-weight:600;letter-spacing:.01em}
   #status{margin-top:.6rem;font-size:.76rem;color:var(--amber);min-height:1.1em}
   .note{margin-top:1.1rem;font-size:.74rem;color:#8a7fa6}
   code{color:var(--amber)}
@@ -32,6 +33,7 @@
     <div class="sub">An endless set composed live by Riff — every segment a fresh, evolving
       Strudel pattern, rendered locally and streamed over HLS.</div>
     <button id="play">▶ Play the stream</button>
+    <div id="now" class="now">♪ tuning in…</div>
     <audio id="a" controls preload="none" src="stream.m3u8"></audio>
     <div class="steer">
       <button data-s="darker">darker</button><button data-s="brighter">brighter</button>
@@ -60,5 +62,17 @@
         status.textContent = hint ? 'steering: ' + hint + ' (from next segment)' : 'steering: off';
       });
     }
+    // "now playing" — poll now.json so the evolving/steered vibe is visible live
+    const now = document.getElementById('now');
+    async function poll() {
+      try {
+        const r = await fetch('now.json', { cache: 'no-store' });
+        if (!r.ok) return;
+        const m = await r.json();
+        const kit = m.kit ? ' · ' + String(m.kit).replace('Roland', '') : '';
+        now.textContent = `♪ now: #${m.index} · ${m.bpm} bpm · ${m.key} ${m.mode}${kit}` + (m.steer ? ` · steer: ${m.steer}` : '');
+      } catch (e) { /* not started yet */ }
+    }
+    setInterval(poll, 5000); poll();
   </script>
 </body></html>

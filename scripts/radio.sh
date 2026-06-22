@@ -70,6 +70,7 @@ while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
   # live steering: re-read <outdir>/steer each segment so an edit nudges the stream from the next one
   steer=""; [ -f "$outdir/steer" ] && steer="$(head -1 "$outdir/steer" 2>/dev/null | tr -d '\r\n')"
   code="$(RADIO_STEER="$steer" RADIO_AUTOSEED=1 node "$compose" "$i")"   # auto-seed by time of day; steer overrides
+  meta="$(printf '%s\n' "$code" | sed -n 's|^// meta: ||p' | head -1)"   # now-playing metadata for the player
   # Each stage skips (not aborts) on failure — a continuous radio must not die on one bad segment.
   if ! node "$gate" "$code" "$work/g.wav" 1 >/dev/null 2>&1; then
     echo "[radio] seed $i failed the gate — skipping" >&2; i=$((i+1)); continue; fi
@@ -86,6 +87,7 @@ while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
   if [ "$window" -gt 0 ] && [ "${#entries[@]}" -gt "$window" ]; then
     old="${entries[0]%%|*}"; rm -f "$outdir/$old"; entries=("${entries[@]:1}"); media_seq=$((media_seq+1))
   fi
+  [ -n "$meta" ] && printf '%s\n' "$meta" > "$outdir/now.json"          # reflect the segment now on air
   write_playlist
   echo "[radio] + $seg (${dur}s)${steer:+ · steer=$steer}" >&2
   i=$((i+1))

@@ -63,4 +63,7 @@ const wantMelody = sparse ? (idx % 4 === 0) : (idx % 3 !== 0);
 if (wantMelody) layers.push(`n("0 2 4 <6 5>").scale("${root}4:${mode}").sound("piano").gain(0.4).room(0.3)`);
 else            layers.push(`n("0 2 4").scale("${root}3:${mode}").sound("piano").gain(0.35).room(0.3)`);
 
-process.stdout.write(`setcpm(${bpm}/4)\nstack(\n  ${layers.join(',\n  ')}\n)\n`);
+// leading // meta line: the player reads it (radio.sh writes it to now.json) to show the live vibe.
+// A // comment is ignored by the gate + renderer (verified), so it travels with the code harmlessly.
+const meta = JSON.stringify({ index: idx, bpm, key: root, mode, kit, steer: effective || "" });
+process.stdout.write(`// meta: ${meta}\nsetcpm(${bpm}/4)\nstack(\n  ${layers.join(',\n  ')}\n)\n`);
