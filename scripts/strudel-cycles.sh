@@ -12,7 +12,10 @@ set -euo pipefail
 code="$(cat "${1:-/dev/stdin}")"
 def="${2:-4}"
 if printf '%s' "$code" | grep -q 'arrange('; then
-  sum=$(printf '%s' "$code" | grep -oE '\[[[:space:]]*[0-9]+[[:space:]]*,' | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}')
+  # Count only true arrange pairs `[bars, section]`: the char after the comma is the section
+  # (an identifier/expression = non-digit), which excludes mini-notation chords like `[0,4,7]`
+  # that would otherwise inflate the length (→ over-long renders).
+  sum=$(printf '%s' "$code" | grep -oE '\[[[:space:]]*[0-9]+[[:space:]]*,[[:space:]]*[^0-9[:space:]]' | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}')
   if [ "${sum:-0}" -gt 0 ]; then echo "$sum"; else echo "$def"; fi
 else
   echo "$def"

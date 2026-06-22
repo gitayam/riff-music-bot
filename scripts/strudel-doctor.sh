@@ -29,6 +29,8 @@ if node "$here/render/render.mjs" 'stack(sound("bd*4"))' /tmp/_doc_g.wav 1 >/dev
 if node "$here/render/render.mjs" '[stack(sound("bd"))]' /tmp/_doc_b.wav 1 >/dev/null 2>&1; then no "gate ACCEPTS invalid [..]-wrap"; else ok "gate rejects invalid code"; fi
 { [ -x "$here/strudel-repair.sh" ] && grep -q "auto-repair" "$here/strudel-deliver.sh"; } \
   && ok "deliver path self-heals (auto-repair wired)" || meh "deliver auto-repair not wired (gate fail → no voice message)"
+[ "$(printf '%s' 'arrange([4,a],[8,b])' | "$here/strudel-cycles.sh" - 2>/dev/null)" = 12 ] \
+  && ok "song length sizing correct (arrange → sum of bars)" || no "strudel-cycles.sh mis-sizes songs (run scripts/test-cycles.sh)"
 
 echo "── soul / capabilities"
 [ -f "$root/souls/hermes.SOUL.md" ] && ok "soul present (souls/hermes.SOUL.md)" || no "soul missing"
