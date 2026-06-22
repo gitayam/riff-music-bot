@@ -12,12 +12,16 @@ import fs from 'node:fs';
 const code = fs.readFileSync(0, 'utf8');
 
 // Split into top-level statements, tracking (){}[] depth so a multi-line `const x = stack( … )`
-// stays one statement. (Parens inside string literals are rare in Strudel patterns; not handled.)
+// stays one statement. Brackets INSIDE string literals (e.g. mini-notation `sound("bd(3,8)")`,
+// `n("[0 2]")`) are ignored — they'd otherwise miscount depth and mis-split a statement.
 function statements(src) {
   const out = []; let cur = ''; let depth = 0;
   for (const line of src.split('\n')) {
+    let q = '';                                       // string state; Strudel strings are single-line
     for (const ch of line) {
-      if (ch === '(' || ch === '[' || ch === '{') depth++;
+      if (q) { if (ch === q) q = ''; continue; }      // inside a string: ignore brackets till it closes
+      if (ch === '"' || ch === "'" || ch === '`') q = ch;
+      else if (ch === '(' || ch === '[' || ch === '{') depth++;
       else if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1);
     }
     cur += (cur ? '\n' : '') + line;

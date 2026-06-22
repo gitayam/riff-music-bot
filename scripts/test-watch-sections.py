@@ -41,5 +41,15 @@ check("includes a strudel.cc link per section", joined.count("https://strudel.cc
 check("surfaces the spoken words + voice", "I bite my tongue" in joined and "onyx" in joined)
 check("a plain loop yields no section messages", sw.section_messages('setcpm(120/4)\nstack(sound("bd*4"))') == [])
 
+# a section so layer-heavy its own link exceeds the limit is dropped (never an oversized message);
+# the normal sections still come through, and a string with brackets must not mis-split it.
+fat = ",\n  ".join(f'sound("hh*8").gain(0.{40 + i})' for i in range(70))
+fat_song = (f'setcpm(120/4)\nconst big = stack(\n  {fat}\n)\n'
+            'const small = stack(sound("bd(3,8)"))\narrange([8,big],[8,small])')
+m2 = sw.section_messages(fat_song)
+check("oversized run: all messages still under 2000", all(len(x) <= 2000 for x in m2))
+check("oversized run: the too-long 'big' section link is dropped", not any("▶ big:" in x for x in m2))
+check("oversized run: the normal 'small' section link is kept", any("▶ small:" in x for x in m2))
+
 print("\nPASS" if fails == 0 else f"\n{fails} FAILED")
 sys.exit(1 if fails else 0)

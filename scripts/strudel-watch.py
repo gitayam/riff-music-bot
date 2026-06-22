@@ -47,8 +47,12 @@ def section_messages(code, say=None, voice=None):
     links = [ln.split("\t", 1) for ln in (r.stdout or "").splitlines() if "\t" in ln]
     if len(links) < 2:
         return []
-    lines = ["🎶 **Section links** — click to play each part:"]
-    lines += [f"▶ {n.strip()}: {l.strip()}" for n, l in links]
+    # drop any single link too long to post on its own (a section link can't be split across messages)
+    link_lines = [f"▶ {n.strip()}: {l.strip()}" for n, l in links]
+    link_lines = [ln for ln in link_lines if len(ln) <= 1900]
+    if not link_lines:
+        return []
+    lines = ["🎶 **Section links** — click to play each part:"] + link_lines
     if say:
         lines.append(f'🎤 vocal ({voice or "ash"}): "{say}"')
     msgs, cur = [], ""                                # pack lines into < 2000-char messages
