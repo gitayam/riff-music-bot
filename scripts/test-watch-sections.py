@@ -60,11 +60,16 @@ check("oversized run: all messages still under 2000", all(len(x) <= 2000 for x i
 check("oversized run: the too-long 'big' section link is dropped", not any("▶ big:" in x for x in m2))
 check("oversized run: the normal 'small' section link is kept", any("▶ small:" in x for x in m2))
 
-# idempotent re-scan: skip a code-reply that already has a following bot voice message
+# idempotent re-scan: a code-reply is "delivered" if a voice msg OR section-links follow it before the
+# next code-reply — order-agnostic (we now post section-links first, then the voice message).
 B = "bot"
-def _m(author, voice=False): return {"author": {"id": author}, "flags": 8192 if voice else 0}
-check("already_delivered: code-reply → voice msg ⇒ True (delivered)", sw.already_delivered([_m(B), _m(B, voice=True)], 0, B) is True)
-check("already_delivered: code-reply, no following voice ⇒ False (stranded)", sw.already_delivered([_m(B), _m(B)], 0, B) is False)
+FENCE = "```javascript\nstack(sound(\"bd*4\"))\n```"
+LINKS = "🎶 **Section links** — click to play each part:\n▶ intro: https://strudel.cc/#abc"
+def _m(author, voice=False, content=""): return {"author": {"id": author}, "flags": 8192 if voice else 0, "content": content}
+check("already_delivered: code-reply → voice ⇒ True", sw.already_delivered([_m(B), _m(B, voice=True)], 0, B) is True)
+check("already_delivered: code-reply → section-links ⇒ True (links-first order)", sw.already_delivered([_m(B), _m(B, content=LINKS)], 0, B) is True)
+check("already_delivered: code-reply → links → voice ⇒ True", sw.already_delivered([_m(B), _m(B, content=LINKS), _m(B, voice=True)], 0, B) is True)
+check("already_delivered: code-reply → another code-reply ⇒ False (stranded)", sw.already_delivered([_m(B), _m(B, content=FENCE)], 0, B) is False)
 check("already_delivered: nothing after ⇒ False", sw.already_delivered([_m(B)], 0, B) is False)
 check("already_delivered: user chatter then voice ⇒ True", sw.already_delivered([_m(B), _m("u"), _m(B, voice=True)], 0, B) is True)
 

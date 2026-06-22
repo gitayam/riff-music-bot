@@ -39,11 +39,21 @@ TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or sys.exit("DISCORD_BOT_TOKEN not s
 
 
 def already_delivered(msgs, idx, bot_id):
-    """True if a bot voice message immediately follows the code-reply at msgs[idx] (i.e. it was already
-    delivered). Lets the watcher safely RE-SCAN history (after a blip stranded some) without
-    re-delivering ones that already got their voice message. msgs is oldest→newest."""
-    nxt = next((x for x in msgs[idx + 1:] if x["author"]["id"] == bot_id), None)
-    return bool(nxt and int(nxt.get("flags", 0)) & 8192)
+    """True if the code-reply at msgs[idx] was already delivered — a bot voice message OR a section-links
+    message appears after it before the next bot code-reply. Handles either delivery order (section-links
+    first, then voice — which is how we post now — or voice-only for a loop). Lets the watcher safely
+    re-scan history without re-delivering. msgs is oldest→newest."""
+    for x in msgs[idx + 1:]:
+        if x["author"]["id"] != bot_id:
+            continue
+        if int(x.get("flags", 0)) & 8192:                  # a voice message → delivered
+            return True
+        c = x.get("content", "")
+        if "Section links" in c:                           # the watcher's section-links message → delivered
+            return True
+        if CODE_RE.search(c):                              # another code-reply first → this one is stranded
+            return False
+    return False
 
 
 def steer_from_message(content):
@@ -190,7 +200,7 @@ def cycle(send):
             if int(m.get("flags", 0)) & 8192: continue             # already a voice message
             mm = CODE_RE.search(m.get("content", ""))
             if not mm: continue
-            if already_delivered(msgs, idx_m, bot_id): continue    # a voice reply already follows → skip
+            if already_delivered(msgs, idx_m, bot_id): continue    # voice/links already follow → skip
             code = mm.group(1).strip()
             vm = VOICE_RE.search(m.get("content", ""))
             say = vm.group(2).strip().strip('"“”\'') if vm else None
@@ -202,17 +212,20 @@ def cycle(send):
             print(f"  ch {ch} msg {m['id']}: Strudel block ({len(code)} chars, {kind}){extra} -> "
                   + ("delivering" if send else "WOULD deliver"))
             if send:
+                for msg in secmsgs:   # post the per-section links FIRST — instant, so a slow full-song
+                    try:              # render still gives the user playable links in seconds (not ~60s)
+                        api(f"/channels/{ch}/messages", "POST", {"content": msg})
+                    except Exception as e:
+                        print(f"    section-link post failed: {e}")
                 with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
                     tf.write(code); path = tf.name
                 try:
                     if say:   # render beat + speak the line over it (chosen voice)
                         cmd = [os.path.join(HERE, os.pardir, "render", "voice-deliver.sh"),
                                "--code", path, "--say", say, "--voice", voice, "--channel", ch, "--send"]
-                    else:     # instrumental (unchanged path)
+                    else:     # instrumental
                         cmd = [os.path.join(HERE, "strudel-deliver.sh"), path, ch, "--send"]
-                    subprocess.run(cmd, check=True)
-                    for msg in secmsgs:   # then the clickable per-section links (+ the spoken words)
-                        api(f"/channels/{ch}/messages", "POST", {"content": msg})
+                    subprocess.run(cmd, check=True)   # then the rendered voice message (slow for a full song)
                 except subprocess.CalledProcessError as e:
                     print(f"    deliver failed (likely render gate) — skipped: {e}")
                 finally:
