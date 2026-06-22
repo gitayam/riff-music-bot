@@ -4,14 +4,16 @@
 # hears an endless stream that keeps being created and morphs over time. Renders offline from the
 # cached sample packs. With --window it keeps a rolling segment window so it can run 24/7.
 #
-#   scripts/radio.sh <outdir> [--max-segments N] [--cycles C] [--window W]
+#   scripts/radio.sh <outdir> [--max-segments N] [--cycles C] [--window W] [--serve] [--port P]
 #     --max-segments N : stop after N (bounded → playlist closed as VOD). 0/omitted = forever (live).
 #     --cycles C       : Strudel cycles per segment (segment length). Default 8.
 #     --window W       : keep only the last W segments on disk + in the playlist (rolling window;
 #                        bumps EXT-X-MEDIA-SEQUENCE). 0/omitted = keep all. Use W>0 for a 24/7 stream.
+#     --serve [--port P]: also serve <outdir> over HTTP (default :8123) with a browser player, so the
+#                        radio is one-command demoable. Opens http://localhost:P/radio.html.
 #
-# Listen:  ( cd <outdir> && python3 -m http.server 8123 )
-#          then open http://localhost:8123/stream.m3u8 in ffplay / VLC / Safari.  Ctrl-C stops it.
+# Demo:    scripts/radio.sh /tmp/radio --serve --window 12     # then open the printed player URL
+# Listen:  ffplay http://localhost:8123/stream.m3u8  (or VLC / Safari).  Ctrl-C stops it.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
@@ -19,17 +21,21 @@ render="$root/render/strudel-render.mjs"   # faithful (offline via cached packs)
 gate="$here/render/render.mjs"             # pure-node parse-gate
 
 outdir="${1:?usage: radio.sh <outdir> [--max-segments N] [--cycles C]}"; shift || true
-max=0; cyc=8; window=0
+max=0; cyc=8; window=0; serve=""; port=8123
 while [ $# -gt 0 ]; do case "$1" in
   --max-segments) shift; max="${1:?--max-segments needs a number}" ;;
   --cycles) shift; cyc="${1:?--cycles needs a number}" ;;
   --window) shift; window="${1:?--window needs a number}" ;;
+  --serve) serve=1 ;;
+  --port) shift; port="${1:?--port needs a number}" ;;
   *) echo "radio.sh: unknown arg '$1'" >&2; exit 2 ;;
 esac; shift; done
 
 mkdir -p "$outdir"
 m3u8="$outdir/stream.m3u8"
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)"; srv_pid=""
+cleanup(){ [ -n "$srv_pid" ] && kill "$srv_pid" 2>/dev/null || true; rm -rf "$work"; }
+trap cleanup EXIT
 
 # Each segment's pattern comes from the evolution engine (radio-compose.mjs <index>), which walks
 # tempo/key/mode/kit/density deterministically so the stream continuously morphs. Cached kits only
@@ -48,6 +54,13 @@ write_playlist() { # $1 == "end" appends #EXT-X-ENDLIST (closes a bounded run as
 }
 write_playlist
 echo "[radio] writing HLS to $m3u8 (cycles/seg=$cyc, max=$max [0=forever], window=$window [0=keep all])" >&2
+
+# Optional: serve the stream + a browser player so the radio is one-command demoable.
+if [ -n "$serve" ]; then
+  cp "$here/radio.html" "$outdir/radio.html" 2>/dev/null || true
+  ( cd "$outdir" && exec python3 -m http.server "$port" >/dev/null 2>&1 ) & srv_pid=$!
+  echo "[radio] ▶ player: http://localhost:$port/radio.html   ·   stream: http://localhost:$port/stream.m3u8" >&2
+fi
 
 i=0
 while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do

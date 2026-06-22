@@ -41,4 +41,16 @@ distinct=$(for k in 0 1 2 3 4 5 6 7; do node "$here/radio-compose.mjs" "$k" 2>/d
 d1="$(node "$here/radio-compose.mjs" 3 2>/dev/null)"; d2="$(node "$here/radio-compose.mjs" 3 2>/dev/null)"
 [ "$d1" = "$d2" ] && chk "evolution: deterministic (same index → same pattern)" 1 || chk "evolution: deterministic" 0
 
-echo; [ "$fails" = 0 ] && { echo "PASS — radio: evolving, rolling-window, valid HLS"; exit 0; } || { echo "$fails FAILED"; exit 1; }
+# ── browser player (radio.html) + --serve over HTTP ──
+{ grep -qi 'stream.m3u8' "$here/radio.html" && grep -qi '<audio' "$here/radio.html"; } 2>/dev/null \
+  && chk "player: radio.html references the stream + has an <audio> element" 1 || chk "player: radio.html valid" 0
+P=8137
+"$here/radio.sh" "$tmp/s" --serve --port "$P" --max-segments 1 --cycles 1 >/dev/null 2>&1 &
+spid=$!
+# curl's own retry waits for the server to come up + the playlist to exist (no shell sleep)
+curl -sf --retry 40 --retry-delay 1 --retry-connrefused --retry-all-errors "http://localhost:$P/stream.m3u8" -o "$tmp/g.m3u8" 2>/dev/null || true
+grep -q '#EXTM3U' "$tmp/g.m3u8" 2>/dev/null && chk "serve: stream.m3u8 served over HTTP" 1 || chk "serve: stream.m3u8 over HTTP" 0
+curl -sf "http://localhost:$P/radio.html" 2>/dev/null | grep -qi 'stream.m3u8' && chk "serve: player page served + references the stream" 1 || chk "serve: player page served" 0
+wait "$spid" 2>/dev/null || true
+
+echo; [ "$fails" = 0 ] && { echo "PASS — radio: evolving, rolling-window, valid HLS, browser-playable"; exit 0; } || { echo "$fails FAILED"; exit 1; }
