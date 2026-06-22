@@ -76,13 +76,20 @@ npm test                            # pure-helper unit tests
 ./test.sh                           # unit + a live wrangler-dev pass against a mock OpenAI
 npx wrangler dev                    # local edge runtime on :8787
 
-# deploy (set secrets + create the D1 DB once, then ship):
+# deploy: see DEPLOY.md for the full ordered runbook (create D1/R2, secrets, deploy, wire Discord,
+# build the render Container). The short version:
 npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put MUSIC_API_TOKEN
 npx wrangler d1 create riff-tracks            # paste the printed id into wrangler.toml database_id
 npx wrangler d1 migrations apply riff-tracks --remote
+npx wrangler r2 bucket create riff-audio
 npx wrangler deploy
+
+# register the /riff slash command (the Discord webhook is inert until you do — guild id = instant):
+DISCORD_APP_ID=… DISCORD_BOT_TOKEN=… DISCORD_GUILD_ID=… node register-command.mjs
 ```
+
+Full step-by-step (with the render Container + verification): **[DEPLOY.md](./DEPLOY.md)**.
 
 `OPENAI_MODEL` (default `gpt-5.4`) and `OPENAI_BASE_URL` (default OpenAI; point at a Cloudflare **AI
 Gateway** in prod for caching + rate-limit + cost observability) are non-secret `[vars]` in `wrangler.toml`.

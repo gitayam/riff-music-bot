@@ -57,10 +57,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 LOG=sys.argv[2]
 class H(BaseHTTPRequestHandler):
     def log_message(self,*a): pass
-    def do_PATCH(self):
+    def _record(self):
         n=int(self.headers.get("Content-Length","0")); b=self.rfile.read(n)
         open(LOG,"ab").write(b+b"\n")
         self.send_response(200); self.send_header("Content-Length","2"); self.end_headers(); self.wfile.write(b"{}")
+    def do_PATCH(self): self._record()   # interaction follow-up
+    def do_PUT(self): self._record()     # slash-command registration
 HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
 python3 "$dmock" "$DPORT" "$DLOG" & DMOCK_PID=$!
@@ -290,6 +292,12 @@ got=""; for _ in $(seq 1 20); do { grep -qF "riff.mp3" "$DLOG" && grep -qF "$EXP
 dsend '{"type":2,"application_id":"app2","token":"tok2","channel_id":"c9","data":{"name":"riff","options":[{"name":"prompt","value":"FAILME please"}]}}'
 got=""; for _ in $(seq 1 20); do grep -qF "strudel.cc/#" "$DLOG" 2>/dev/null && { got=1; break; }; sleep 0.5; done
 { [ -n "$got" ] && ! grep -qF "riff.mp3" "$DLOG"; } && ok "Discord render-failure → text follow-up (link, no attachment)" || bad "discord degrade (got=$got)"
+
+# register-command.mjs (deploy tool) — real process against the mock Discord (which logs PUT).
+: > "$DLOG"
+DISCORD_APP_ID=app1 DISCORD_BOT_TOKEN=tok DISCORD_API_BASE="http://127.0.0.1:$DPORT" node register-command.mjs >/dev/null 2>&1
+{ grep -qF '"name":"riff"' "$DLOG" && grep -qF '"name":"prompt"' "$DLOG"; } \
+  && ok "register-command.mjs PUTs the /riff slash command" || bad "register-command did not register"
 rm -f /tmp/worker-resp.$$
 
 echo
