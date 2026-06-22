@@ -38,6 +38,14 @@ STEER_CMD_RE = re.compile(r"^\s*(?:!radio|!steer|🎛️?)\s*(?:steer\s+)?(.+)$"
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or sys.exit("DISCORD_BOT_TOKEN not set (source .env)")
 
 
+def already_delivered(msgs, idx, bot_id):
+    """True if a bot voice message immediately follows the code-reply at msgs[idx] (i.e. it was already
+    delivered). Lets the watcher safely RE-SCAN history (after a blip stranded some) without
+    re-delivering ones that already got their voice message. msgs is oldest→newest."""
+    nxt = next((x for x in msgs[idx + 1:] if x["author"]["id"] == bot_id), None)
+    return bool(nxt and int(nxt.get("flags", 0)) & 8192)
+
+
 def steer_from_message(content):
     """A chat steer command → the hint to write to the radio steer file; None if not a command,
     or '' to explicitly clear. Only an explicit !radio/!steer/🎛️ prefix triggers (so a normal
@@ -83,17 +91,23 @@ def section_messages(code, say=None, voice=None):
         msgs.append(cur)
     return msgs
 
-def api(path, method="GET", body=None):
+def api(path, method="GET", body=None, _try=0):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(API + path, data=data, method=method,
         headers={"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json",
                  "User-Agent": "DiscordBot (https://github.com/zeroclaw-labs/zeroclaw, 0.1) strudel-watch"})
     try:
-        with urllib.request.urlopen(req) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read() or "null")
     except urllib.error.HTTPError as e:
         if e.code == 429:
-            time.sleep(float(e.headers.get("Retry-After", "2")) + 0.5); return api(path, method, body)
+            time.sleep(float(e.headers.get("Retry-After", "2")) + 0.5); return api(path, method, body, _try)
+        raise
+    except (urllib.error.URLError, TimeoutError) as e:
+        # transient network/DNS blip (e.g. a resolver hiccup after a VPN/network change) — retry with
+        # backoff so a brief outage can't kill the whole poll cycle, which previously stranded deliveries.
+        if _try < 4:
+            time.sleep(min(2 ** _try, 8)); return api(path, method, body, _try + 1)
         raise
 
 def load_state():
@@ -126,7 +140,7 @@ def cycle(send):
         if last is None:                                            # first sight: arm, don't replay history
             if msgs: state[ch] = msgs[-1]["id"]
             continue
-        for m in msgs:
+        for idx_m, m in enumerate(msgs):
             state[ch] = m["id"]
             if RADIO_STEER_FILE:                       # chat steering (any author) for a running radio
                 sh = steer_from_message(m.get("content", ""))
@@ -140,6 +154,7 @@ def cycle(send):
             if int(m.get("flags", 0)) & 8192: continue             # already a voice message
             mm = CODE_RE.search(m.get("content", ""))
             if not mm: continue
+            if already_delivered(msgs, idx_m, bot_id): continue    # a voice reply already follows → skip
             code = mm.group(1).strip()
             vm = VOICE_RE.search(m.get("content", ""))
             say = vm.group(2).strip().strip('"“”\'') if vm else None

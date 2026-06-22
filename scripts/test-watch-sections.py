@@ -60,5 +60,27 @@ check("oversized run: all messages still under 2000", all(len(x) <= 2000 for x i
 check("oversized run: the too-long 'big' section link is dropped", not any("▶ big:" in x for x in m2))
 check("oversized run: the normal 'small' section link is kept", any("▶ small:" in x for x in m2))
 
+# idempotent re-scan: skip a code-reply that already has a following bot voice message
+B = "bot"
+def _m(author, voice=False): return {"author": {"id": author}, "flags": 8192 if voice else 0}
+check("already_delivered: code-reply → voice msg ⇒ True (delivered)", sw.already_delivered([_m(B), _m(B, voice=True)], 0, B) is True)
+check("already_delivered: code-reply, no following voice ⇒ False (stranded)", sw.already_delivered([_m(B), _m(B)], 0, B) is False)
+check("already_delivered: nothing after ⇒ False", sw.already_delivered([_m(B)], 0, B) is False)
+check("already_delivered: user chatter then voice ⇒ True", sw.already_delivered([_m(B), _m("u"), _m(B, voice=True)], 0, B) is True)
+
+# api(): a transient DNS/URLError blip is retried (not fatal — this is what wedged the watcher)
+import urllib.error
+_calls = {"n": 0}
+class _R:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self): return b'{"ok": true}'
+def _fake(req, timeout=None):
+    _calls["n"] += 1
+    if _calls["n"] < 3: raise urllib.error.URLError("nodename nor servname provided")
+    return _R()
+sw.urllib.request.urlopen = _fake; sw.time.sleep = lambda *a: None
+check("api() retries a transient DNS/URLError then succeeds", sw.api("/health") == {"ok": True} and _calls["n"] == 3)
+
 print("\nPASS" if fails == 0 else f"\n{fails} FAILED")
 sys.exit(1 if fails else 0)
