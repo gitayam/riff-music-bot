@@ -89,6 +89,37 @@ Expose with `cloudflared tunnel --url http://localhost:8799`. See [`scripts/api-
 faithful headless render (`render/strudel-render.mjs`, real strudel.cc samples) → Opus/OGG
 → voice message. `scripts/strudel-doctor.sh` is a one-command pre-demo health check.
 
+## From a loop to a song (the musical model)
+
+Riff builds music the way a producer does — **in layers and sections, not one giant blob:**
+
+1. **A loop is the unit.** One `stack(...)` of parts (kick · hats · bass · chords) at a chosen
+   key + tempo. The per-genre starting points live in [`docs/music-theory-for-zeroclaw.md`](docs/music-theory-for-zeroclaw.md).
+2. **Many loops = sections.** intro · verse · pre-chorus · **chorus** · bridge · outro — each
+   a loop tuned to its job. Energy comes from **adding/removing layers and opening the filter**,
+   not just volume: a sparse intro (just chords) → drums enter for the verse → the **chorus is
+   the peak** (full kit + the hook) → the outro winds down. (Song anatomy is in the theory doc.)
+3. **Merge + multi-layer into a song.** Sections are sequenced with Strudel's
+   `arrange([bars, section], …)` (one render) or rendered as stems and assembled with `ffmpeg`
+   crossfades — giving the track a real arc. Here's that arc **measured from one of Riff's
+   renders** (a ~48 s song):
+
+   | Section | mean vol | HF (hats / lead) |
+   |---|---|---|
+   | intro (0–8 s) | −32.9 dB | −72.5 dB · just chords |
+   | verse (8–24 s) | −18.9 dB | −44.0 dB · drums in |
+   | **chorus (24–40 s)** | **−14.1 dB** | **−38.9 dB · peak — hook + full kit** |
+   | outro (40–48 s) | −32.3 dB | −63.4 dB · winds down |
+
+   That's the textbook shape: a quiet, high-frequency-light intro → energy ramping through the
+   verse → the **chorus ~19 dB louder and far brighter** (the payoff) → a calm outro. Full
+   song-composition design (Strudel-native `arrange` vs stem-assembly) is in the
+   [roadmap](docs/sundai-zeroclaw-music-roadmap.md).
+4. **Vocals where it helps.** When a request wants a spoken/sung line, Riff emits a
+   `🎤 say: …` directive and the pipeline speaks it over the beat via **OpenAI TTS**, rendered
+   and mixed locally (see [`render/VOICE-LAYER.md`](render/VOICE-LAYER.md)) — so a track can
+   carry a hook, chant, or callout, not just instruments.
+
 ## Layout
 
 | Path | What |
