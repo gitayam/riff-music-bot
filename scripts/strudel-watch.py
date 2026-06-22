@@ -20,6 +20,9 @@ import os, sys, re, json, time, subprocess, tempfile, urllib.request, urllib.err
 API = "https://discord.com/api/v10"
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, os.pardir, "data", "strudel-watch-state.json")
+# liveness heartbeat: touched at the end of each poll cycle so watchdog.sh can detect a ZOMBIE
+# (process alive but the poll loop stopped) — launchd KeepAlive only catches a hard crash.
+HEARTBEAT = os.environ.get("WATCH_HEARTBEAT") or os.path.join(HERE, os.pardir, "data", "strudel-watch.heartbeat")
 CODE_RE = re.compile(r"```(?:javascript|js)?\s*\n(.*?)```", re.S)
 # Optional spoken-vocal directive Riff may add: "🎤 say: <words>" or "🎤 say [voice]: <words>"
 # (one line). When present, we render the beat AND speak the line over it via voice-deliver.sh
@@ -140,6 +143,12 @@ def cycle(send):
                 finally:
                     os.unlink(path)
     save_state(state)
+    try:                                              # heartbeat: a completed cycle = loop is alive
+        os.makedirs(os.path.dirname(HEARTBEAT), exist_ok=True)
+        with open(HEARTBEAT, "w") as f:
+            f.write(str(int(time.time())))
+    except Exception:
+        pass
 
 def main():
     send = "--send" in sys.argv

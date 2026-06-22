@@ -24,6 +24,7 @@ run "generative radio (HLS)" bash   "$here/test-radio.sh"
 run "steerable radio server" bash   "$here/test-radio-serve.sh"
 run "song section links"     bash    "$here/test-song-links.sh"
 run "watcher section msgs"   python3 "$here/test-watch-sections.py"
+run "self-heal watchdog"     bash    "$here/test-watchdog.sh"
 
 echo
 echo "═══════════════════════════════════════════"

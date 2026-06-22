@@ -15,12 +15,15 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo root
 LA="$HOME/Library/LaunchAgents"
 U="$(id -u)"
-names=(hermes strudel-watch music-api)
+names=(hermes strudel-watch music-api watchdog)
 
-plist() {  # $1=name  $2=script(rel to repo)  $3=arg(optional)  $4=logfile
-  local name="$1" script="$2" arg="${3:-}" log="$4"
+plist() {  # $1=name  $2=script(rel to repo)  $3=arg(optional)  $4=logfile  $5=interval(optional → periodic)
+  local name="$1" script="$2" arg="${3:-}" log="$4" interval="${5:-}"
   local extra=""; [ -n "$arg" ] && extra="
         <string>$arg</string>"
+  # KeepAlive for always-on daemons; StartInterval (no KeepAlive) for the periodic watchdog
+  local lifecycle="    <key>KeepAlive</key><true/>"
+  [ -n "$interval" ] && lifecycle="    <key>StartInterval</key><integer>$interval</integer>"
   cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -39,7 +42,7 @@ plist() {  # $1=name  $2=script(rel to repo)  $3=arg(optional)  $4=logfile
         <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
     <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
+$lifecycle
     <key>StandardOutPath</key><string>$DIR/$log</string>
     <key>StandardErrorPath</key><string>$DIR/$log</string>
     <key>ThrottleInterval</key><integer>10</integer>
@@ -48,19 +51,20 @@ plist() {  # $1=name  $2=script(rel to repo)  $3=arg(optional)  $4=logfile
 EOF
 }
 
-emit() {  # write all three plists into $1
+emit() {  # write all plists into $1 (3 always-on daemons + the periodic self-heal watchdog)
   plist hermes        run.sh                 daemon  daemon.log        > "$1/com.zeroclaw.hermes.plist"
   plist strudel-watch scripts/watch.sh       ""      strudel-watch.log > "$1/com.zeroclaw.strudel-watch.plist"
   plist music-api     scripts/api-server.sh  ""      music-api.log     > "$1/com.zeroclaw.music-api.plist"
+  plist watchdog      scripts/watchdog.sh    ""      watchdog-svc.log  120 > "$1/com.zeroclaw.watchdog.plist"
 }
 
 case "${1:-install}" in
   --generate) gen="${2:?usage: --generate DIR}"; mkdir -p "$gen"; emit "$gen"
-              echo "wrote 3 plists to $gen (paths rooted at $DIR)";;
+              echo "wrote ${#names[@]} plists to $gen (paths rooted at $DIR)";;
   --uninstall) for n in "${names[@]}"; do
                  launchctl bootout "gui/$U/com.zeroclaw.$n" 2>/dev/null || true
                  rm -f "$LA/com.zeroclaw.$n.plist"
-               done; echo "uninstalled 3 services";;
+               done; echo "uninstalled ${#names[@]} services";;
   install) mkdir -p "$LA"; emit "$LA"
            for n in "${names[@]}"; do
              launchctl bootout "gui/$U/com.zeroclaw.$n" 2>/dev/null || true

@@ -37,4 +37,9 @@ simplex/group-link.txt
 # watchdog runtime state
 watchdog.log
 watchdog.err
-.watchdog-fails
+watchdog-svc.log
+.watchdog-fails*
+
+# python bytecode (from importable test harnesses)
+__pycache__/
+*.pyc
