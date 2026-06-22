@@ -82,3 +82,40 @@ export function buildChatBody(userContent, model) {
 export function repairPrompt(prompt, lastErr, brokenCode) {
   return `${prompt}\n\nYour previous attempt was not valid Strudel. Error: ${lastErr}\nBroken code:\n${brokenCode}\nReturn corrected, valid Strudel code only (one \`\`\`javascript block).`;
 }
+
+// The modify ask: hand the model the current code + a NL change and get the FULL updated program back.
+// This is Situation E ("faster" / "add a bassline" / "darker") — the demo's core differentiator: we
+// edit the code, we don't re-roll a black box. The same SYSTEM_PROMPT (valid-Strudel rules) applies.
+export function modifyUserContent(code, instruction) {
+  return `Current Strudel code:\n${code}\n\nApply this change and return the FULL updated program as one \`\`\`javascript block (keep everything else intact): ${instruction}`;
+}
+
+// Minimal LCS line-diff so a /modify response can SHOW the change (what makes the modify demo land).
+// Pure + O(n·m) — fine for short patterns. Returns [{tag:' '|'-'|'+', line}].
+export function lineDiff(a, b) {
+  const A = String(a).split("\n");
+  const B = String(b).split("\n");
+  const m = A.length, n = B.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--)
+    for (let j = n - 1; j >= 0; j--)
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (A[i] === B[j]) { out.push({ tag: " ", line: A[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ tag: "-", line: A[i] }); i++; }
+    else { out.push({ tag: "+", line: B[j] }); j++; }
+  }
+  while (i < m) out.push({ tag: "-", line: A[i++] });
+  while (j < n) out.push({ tag: "+", line: B[j++] });
+  return out;
+}
+
+// Compact unified-ish diff string (only the changed lines) for the /modify JSON response.
+export function diffString(a, b) {
+  return lineDiff(a, b)
+    .filter((d) => d.tag !== " ")
+    .map((d) => `${d.tag} ${d.line}`)
+    .join("\n");
+}

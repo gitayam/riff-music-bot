@@ -28,12 +28,15 @@ mock=/tmp/worker-mock.$$.py
 cat > "$mock" <<'PY'
 import sys, json
 from http.server import BaseHTTPRequestHandler, HTTPServer
-CODE = 'setcpm(120/4)\nstack(sound("bd*4"))'
+# Branch on the request so /generate and /modify return DIFFERENT code → a meaningful diff to assert.
+BASE = 'setcpm(120/4)\nstack(sound("bd*4"))'
+MOD  = 'setcpm(120/4)\nstack(sound("bd*4").bank("RolandTR909"))'
 class H(BaseHTTPRequestHandler):
     def log_message(self,*a): pass
     def do_POST(self):
-        n=int(self.headers.get("Content-Length","0")); self.rfile.read(n)
-        body=json.dumps({"choices":[{"message":{"content":f"Here you go:\n```javascript\n{CODE}\n```"}}]}).encode()
+        n=int(self.headers.get("Content-Length","0")); req=self.rfile.read(n).decode("utf8","ignore")
+        code = MOD if "Apply this change" in req else BASE   # modifyUserContent contains "Apply this change"
+        body=json.dumps({"choices":[{"message":{"content":f"Here you go:\n```javascript\n{code}\n```"}}]}).encode()
         self.send_response(200); self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
 HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
@@ -41,12 +44,15 @@ PY
 python3 "$mock" "$MOCKPORT" & MOCK_PID=$!
 
 # Boot wrangler dev locally; inject token + a mock OpenAI base via --var (overrides wrangler.toml).
-wrangler dev --port "$PORT" --inspector-port 0 --ip 127.0.0.1 \
+# --persist-to a FRESH temp dir so Durable Object state starts empty every run (the default
+# .wrangler/state persists across runs → version numbers would accumulate and the asserts would drift).
+STATE="/tmp/worker-state.$$"
+wrangler dev --port "$PORT" --inspector-port 0 --ip 127.0.0.1 --persist-to "$STATE" \
   --var "MUSIC_API_TOKEN:$TOK" --var "OPENAI_API_KEY:mock-key" \
   --var "OPENAI_BASE_URL:http://127.0.0.1:$MOCKPORT" \
   >/tmp/worker-dev.$$ 2>&1 </dev/null & DEV_PID=$!
 
-cleanup(){ kill "$DEV_PID" "$MOCK_PID" 2>/dev/null; wait "$DEV_PID" 2>/dev/null; rm -f "$mock" /tmp/worker-dev.$$; }
+cleanup(){ kill "$DEV_PID" "$MOCK_PID" 2>/dev/null; wait "$DEV_PID" 2>/dev/null; rm -rf "$mock" /tmp/worker-dev.$$ "$STATE"; }
 trap cleanup EXIT
 
 base="http://127.0.0.1:$PORT"
@@ -85,6 +91,38 @@ chk "POST /render valid → 200 link"          POST   /render   200 "$TOK" '{"co
 chk "POST /render prose → 422"               POST   /render   422 "$TOK" '{"code":"a chill beat please"}'
 chk "POST /render [..]-wrap → 422"           POST   /render   422 "$TOK" '{"code":"[stack(sound(\"bd*4\"))]"}'
 chk "POST /render missing code → 400"        POST   /render   400 "$TOK" '{}'
+
+# Stateful modify chain (Durable Object). Issue each state-changing request ONCE and assert on its
+# body (re-issuing would bump the version), so these are explicit curl+grep, not the chk helper.
+post(){ RESP=$(curl -s -w $'\n%{http_code}' -X POST -H "Authorization: Bearer $TOK" \
+        -H "Content-Type: application/json" --data "$2" "$base$1"); CODE=${RESP##*$'\n'}; RESP=${RESP%$'\n'*}; }
+has(){ printf '%s' "$RESP" | grep -qF "$1"; }
+
+post /generate '{"prompt":"funky disco loop","session_id":"s1"}'
+{ [ "$CODE" = 200 ] && has '"version":1' && has '"session_id":"s1"' && has '"parent_id":null'; } \
+  && ok "POST /generate w/ session_id → v1" || bad "generate w/ session (code=$CODE)"
+
+post /modify '{"session_id":"s1","instruction":"use a 909 kit"}'
+{ [ "$CODE" = 200 ] && has '"version":2' && has '"parent_id":1' && has 'RolandTR909'; } \
+  && ok "POST /modify → v2, parent 1, code edited" || bad "modify (code=$CODE)"
+# the diff must actually show the change: it starts with a removed line ("\"diff\":\"- ...")
+if has '"diff":"- '; then ok "modify response includes a non-empty code diff"; else bad "modify diff missing/empty"; fi
+
+post /modify '{"session_id":"s1","instruction":"slower"}'
+{ [ "$CODE" = 200 ] && has '"version":3' && has '"parent_id":2'; } \
+  && ok "POST /modify again → v3 chains on v2" || bad "modify chain (code=$CODE)"
+
+post /modify '{"session_id":"never-seen","instruction":"darker"}'
+[ "$CODE" = 404 ] && ok "POST /modify unknown session → 404" || bad "unknown session (code=$CODE)"
+
+post /modify '{"session_id":"s1"}'
+[ "$CODE" = 400 ] && ok "POST /modify missing instruction → 400" || bad "modify no-instruction (code=$CODE)"
+
+post /modify '{"instruction":"darker"}'
+[ "$CODE" = 400 ] && ok "POST /modify missing session_id → 400" || bad "modify no-session (code=$CODE)"
+
+RESP=$(curl -s -X POST "$base/modify" --data '{"session_id":"s1","instruction":"x"}' -w $'\n%{http_code}');
+[ "${RESP##*$'\n'}" = 401 ] && ok "POST /modify no auth → 401" || bad "modify no-auth"
 rm -f /tmp/worker-resp.$$
 
 echo

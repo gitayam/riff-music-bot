@@ -14,7 +14,13 @@
 // Env: OPENAI_API_KEY (secret), MUSIC_API_TOKEN (secret), OPENAI_MODEL (var, default gpt-5.4),
 //      OPENAI_BASE_URL (var, default https://api.openai.com/v1 — point at an AI Gateway in prod).
 
-import { shareUrl, extractStrudel, validateStrudel, buildChatBody, repairPrompt } from "./lib.js";
+import {
+  shareUrl, extractStrudel, validateStrudel, buildChatBody, repairPrompt,
+  modifyUserContent, diffString,
+} from "./lib.js";
+import { Session } from "./session.js";
+
+export { Session }; // the runtime needs the DO class exported from the entry module
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -73,14 +79,15 @@ async function callOpenAI(env, userContent) {
   }
 }
 
-// prompt → valid Strudel, auto-repairing on a failed structural gate (mirrors api-server.py
-// generate_valid). Throws Error{status:422} if it never converges.
-async function generateValid(env, prompt, attempts) {
+// Ask the LLM for valid Strudel from `initialContent`, auto-repairing on a failed structural gate
+// (mirrors api-server.py generate_valid). Used by both /generate (content = the prompt) and /modify
+// (content = current code + the change). Throws Error{status:422} if it never converges.
+async function composeValid(env, initialContent, attempts) {
   attempts = Math.max(1, Math.min(4, parseInt(attempts, 10) || 2));
   let lastErr = "invalid Strudel code";
   let code = "";
   for (let i = 0; i < attempts; i++) {
-    const userContent = i === 0 ? prompt : repairPrompt(prompt, lastErr, code.slice(0, 800));
+    const userContent = i === 0 ? initialContent : repairPrompt(initialContent, lastErr, code.slice(0, 800));
     const text = await callOpenAI(env, userContent);
     const extracted = extractStrudel(text);
     if (extracted === null) {
@@ -98,6 +105,12 @@ async function generateValid(env, prompt, attempts) {
   throw e;
 }
 
+// The DO stub for a conversation. idFromName(session_id) is stable, so the same session_id always
+// maps to the same modify chain (Contract 1: "discord:user:1234").
+function sessionStub(env, sessionId) {
+  return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId));
+}
+
 async function handlePost(request, env, path) {
   // Auth — same contract as api-server.py: no token configured OR mismatch → 401.
   const auth = request.headers.get("Authorization") || "";
@@ -112,10 +125,33 @@ async function handlePost(request, env, path) {
   }
 
   try {
+    // /modify is stateful (loads + edits the session's last version) → handled on its own.
+    if (path === "/modify") {
+      if (!req.session_id || typeof req.session_id !== "string") return json(400, { error: "missing 'session_id'" });
+      if (!req.instruction || typeof req.instruction !== "string") return json(400, { error: "missing 'instruction'" });
+      const stub = sessionStub(env, req.session_id);
+      const prev = await stub.latest();
+      if (!prev) return json(404, { error: "unknown session_id — call /generate with this session_id first" });
+      const code = await composeValid(env, modifyUserContent(prev.code, req.instruction), req.repair_attempts);
+      const share = shareUrl(code);
+      const version = await stub.append({ code, share_url: share, source: "modify", instruction: req.instruction });
+      return json(200, {
+        session_id: req.session_id,
+        instruction: req.instruction,
+        strudel_code: code,
+        share_url: share,
+        diff: diffString(prev.code, code), // show the change — the modify demo's whole point
+        audio_url: null,
+        version,
+        parent_id: prev.version,
+        engine: "tier-a-link",
+      });
+    }
+
     let code;
     if (path === "/generate") {
       if (!req.prompt || typeof req.prompt !== "string") return json(400, { error: "missing 'prompt'" });
-      code = await generateValid(env, req.prompt, req.repair_attempts);
+      code = await composeValid(env, req.prompt, req.repair_attempts);
     } else if (path === "/render") {
       if (!req.code || typeof req.code !== "string") return json(400, { error: "missing 'code'" });
       const err = validateStrudel(req.code); // caller's own code → never rewrite it, 422 if invalid
@@ -124,12 +160,23 @@ async function handlePost(request, env, path) {
     } else {
       return json(404, { error: "not found" });
     }
+    // Optionally start/extend a session so the result can be modified later.
+    const share = shareUrl(code);
+    let version = 1, parent_id = null;
+    if (req.session_id && typeof req.session_id === "string") {
+      const stub = sessionStub(env, req.session_id);
+      const prev = await stub.latest();
+      parent_id = prev ? prev.version : null;
+      version = await stub.append({ code, share_url: share, source: path.slice(1), instruction: null });
+    }
     return json(200, {
       prompt: req.prompt ?? null,
+      session_id: req.session_id ?? null,
       strudel_code: code,
-      share_url: shareUrl(code),
+      share_url: share,
       audio_url: null, // Tier-A: render (audio) lands in Phase 3 P1 (Container)
-      version: 1,
+      version,
+      parent_id,
       engine: "tier-a-link",
     });
   } catch (e) {
@@ -146,14 +193,15 @@ export default {
       if (pathname === "/health") return json(200, { ok: true });
       if (pathname === "/" || pathname === "/help") {
         return json(200, {
-          service: "Riff music API (Cloudflare Worker · Phase 3 P0 · Tier-A link)",
+          service: "Riff music API (Cloudflare Worker · Phase 3 P0+P2 · Tier-A link)",
           auth: "Authorization: Bearer <MUSIC_API_TOKEN> on every POST",
           endpoints: {
-            "POST /generate": "{prompt, repair_attempts?=2} → {strudel_code, share_url, audio_url:null, version} (prompt → Strudel via gpt-5.4; auto-repairs invalid Strudel)",
-            "POST /render": "{code} → same shape (validates + links Strudel you already have)",
+            "POST /generate": "{prompt, session_id?, repair_attempts?=2} → {strudel_code, share_url, audio_url:null, version, session_id} (prompt → Strudel via gpt-5.4; auto-repairs invalid Strudel; pass a stable session_id to enable /modify)",
+            "POST /modify": "{session_id, instruction, repair_attempts?=2} → {strudel_code, share_url, diff, version, parent_id} (edits the session's latest version — 'faster' / 'darker' / 'add a bassline' — and returns the code diff)",
+            "POST /render": "{code, session_id?} → same shape (validates + links Strudel you already have)",
             "GET /health": "{ok:true}",
           },
-          note: "Tier-A: returns code + a one-click strudel.cc play link. Audio render (audio_url) arrives in Phase 3 P1 (Container).",
+          note: "Tier-A: returns code + a one-click strudel.cc play link, and a per-session modify chain (Durable Object). Audio render (audio_url) arrives in Phase 3 P1 (Container).",
         });
       }
       return json(404, { error: "not found" });

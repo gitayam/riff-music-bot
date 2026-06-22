@@ -1,12 +1,14 @@
-# Riff music API — Cloudflare Worker (Phase 3 P0)
+# Riff music API — Cloudflare Worker (Phase 3 P0 + P2)
 
-The first vertical slice of getting Riff **off the laptop** (roadmap Phase 3). This Worker ports the
-request/response surface of `scripts/api-server.py` to Cloudflare's edge — **Tier-A only**: a prompt
-becomes valid Strudel code + a one-click `strudel.cc` play link. **No audio render yet** — that needs a
-Container (Phase 3 P1), so `audio_url` is always `null` here.
+Getting Riff **off the laptop** (roadmap Phase 3). This Worker ports the request/response surface of
+`scripts/api-server.py` to Cloudflare's edge — **Tier-A**: a prompt becomes valid Strudel code + a
+one-click `strudel.cc` play link, and a **per-session modify chain** (`/modify`: "faster" / "darker" /
+"add a bassline") backed by a **Durable Object**, returning the code diff. **No audio render yet** — that
+needs a Container (Phase 3 P1), so `audio_url` is always `null` here.
 
-Why this first: it proves the orchestrator runs on a **stable URL, always-on, no laptop** — retiring the
-ephemeral quick tunnel — without taking on the hard part (headless-Chromium render in a Container).
+Why this shape: it proves the orchestrator — including the **modify loop, the demo's core differentiator**
+— runs on a **stable URL, always-on, no laptop** (retiring the ephemeral quick tunnel) without taking on
+the hard part (headless-Chromium render in a Container).
 
 ## Endpoints
 
@@ -14,11 +16,18 @@ ephemeral quick tunnel — without taking on the hard part (headless-Chromium re
 |---|---|---|
 | `GET /health` | — | `{ok:true}` |
 | `GET /` | — | self-documenting capabilities |
-| `POST /generate` | `{prompt, repair_attempts?=2}` | `{prompt, strudel_code, share_url, audio_url:null, version, engine}` |
-| `POST /render` | `{code}` | same shape (validates + links code you already have; never rewrites it) |
+| `POST /generate` | `{prompt, session_id?, repair_attempts?=2}` | `{prompt, session_id, strudel_code, share_url, audio_url:null, version, parent_id, engine}` |
+| `POST /modify` | `{session_id, instruction, repair_attempts?=2}` | `{strudel_code, share_url, diff, version, parent_id, …}` — edits the session's latest version |
+| `POST /render` | `{code, session_id?}` | same shape (validates + links code you already have; never rewrites it) |
 
 `POST` requires `Authorization: Bearer <MUSIC_API_TOKEN>` (same contract as `api-server.py`). Errors:
-`400` bad/missing field · `401` unauthorized · `422` invalid Strudel · `502` LLM upstream/config · `504` LLM timeout.
+`400` bad/missing field · `401` unauthorized · `404` unknown session (modify) · `422` invalid Strudel ·
+`502` LLM upstream/config · `504` LLM timeout.
+
+**The modify loop:** pass a stable `session_id` (e.g. `"discord:user:1234"`) to `/generate`; then
+`POST /modify {session_id, instruction:"make it darker"}` loads the last version, asks the model to edit
+the code, validates it, stores the new version, and returns the new code + a `diff`. One Durable Object
+per `session_id` holds the ordered version chain (`parent_id` links them). Runs locally in `wrangler dev`.
 
 The `share_url` is `https://strudel.cc/#<base64(utf8(code))>` — **byte-identical** to the local Python/Node
 systems (a unit test enforces this), so links from the edge play exactly like links from the laptop.
@@ -47,5 +56,6 @@ Gateway** in prod for caching + rate-limit + cost observability) are non-secret 
 - **The authoritative `@strudel/transpiler` parse-gate** → P1 (ships with the Container). `validateStrudel()`
   here is a lightweight structural pre-check that catches prose-instead-of-code and the `[ ...whole program... ]`
   wrap bug; it is not a full parse.
-- **Per-session modify state / history** → Phase 3 P2 (Durable Object) · **`tracks` in D1** · **embeddings in Vectorize**.
+- **Cross-session `tracks` history in D1** + **embeddings in Vectorize** ("more like this") → the rest of Phase 3 P2.
+  (The per-session modify chain itself — the Durable Object — is **built**, above.)
 - **Discord-native Interactions webhook** (retires the daemon + watcher) → Phase 3 P3.

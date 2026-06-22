@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { shareUrl, b64utf8, extractStrudel, validateStrudel, buildChatBody, SYSTEM_PROMPT } from "../src/lib.js";
+import { shareUrl, b64utf8, extractStrudel, validateStrudel, buildChatBody, SYSTEM_PROMPT, lineDiff, diffString, modifyUserContent } from "../src/lib.js";
 
 const SAMPLE = 'setcpm(120/4)\nstack(sound("bd*4"))';
 
@@ -66,4 +66,28 @@ test("SYSTEM_PROMPT carries the hard-won anti-hallucination rules", () => {
   assert.match(SYSTEM_PROMPT, /square brackets/);
   assert.match(SYSTEM_PROMPT, /setcpm/);
   assert.match(SYSTEM_PROMPT, /ONE fenced code block/);
+});
+
+test("lineDiff marks added/removed/unchanged lines (LCS)", () => {
+  const d = lineDiff("a\nb\nc", "a\nB\nc");
+  assert.deepEqual(d, [
+    { tag: " ", line: "a" },
+    { tag: "-", line: "b" },
+    { tag: "+", line: "B" },
+    { tag: " ", line: "c" },
+  ]);
+});
+test("diffString shows only the changed lines with +/- markers", () => {
+  const s = diffString('setcpm(120/4)\nstack(sound("bd*4"))', 'setcpm(140/4)\nstack(sound("bd*4"))');
+  assert.equal(s, '- setcpm(120/4)\n+ setcpm(140/4)');
+});
+test("diffString is empty when code is unchanged", () => {
+  assert.equal(diffString("a\nb", "a\nb"), "");
+});
+test("modifyUserContent embeds the current code and the change", () => {
+  const c = modifyUserContent('stack(sound("bd*4"))', "make it darker");
+  assert.match(c, /Current Strudel code:/);
+  assert.match(c, /stack\(sound\("bd\*4"\)\)/);
+  assert.match(c, /make it darker/);
+  assert.match(c, /FULL updated program/);
 });
