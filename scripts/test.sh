@@ -21,6 +21,8 @@ run "soul examples parse"   python3 "$here/test-soul-examples.py"
 run "sync-API auto-repair"  python3 "$here/test-auto-repair.py"
 run "deliver auto-repair"   bash    "$here/test-deliver-repair.sh"
 run "generative radio (HLS)" bash   "$here/test-radio.sh"
+run "song section links"     bash    "$here/test-song-links.sh"
+run "watcher section msgs"   python3 "$here/test-watch-sections.py"
 
 echo
 echo "═══════════════════════════════════════════"

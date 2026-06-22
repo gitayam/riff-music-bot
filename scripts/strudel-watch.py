@@ -26,7 +26,39 @@ CODE_RE = re.compile(r"```(?:javascript|js)?\s*\n(.*?)```", re.S)
 # with the chosen voice; else instrumental. Backward-compatible: the [voice] group is optional.
 VOICE_RE = re.compile(r"(?:🎤|🎙️?)\s*say\s*(?:\[\s*([a-z]+)\s*\])?\s*:\s*(.+)", re.I)
 VOICES = {"alloy","ash","ballad","coral","echo","fable","nova","onyx","sage","shimmer","verse","marin","cedar"}
+SONG_RE = re.compile(r"\barrange\s*\(")          # a full song (vs a single loop)
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or sys.exit("DISCORD_BOT_TOKEN not set (source .env)")
+
+
+def section_messages(code, say=None, voice=None):
+    """For a full song, return per-section play links as Discord-ready messages (each < 2000 chars).
+
+    A full song's whole-program base64 link is too long to post, so we give one SELF-CONTAINED
+    strudel.cc link per section (intro/verse/chorus/…) — generated deterministically by
+    strudel-song-links.mjs, never hand-written — plus the spoken vocal line. Returns [] for a
+    single loop or if generation fails (delivery still works; this is additive)."""
+    if not SONG_RE.search(code):
+        return []
+    try:
+        r = subprocess.run(["node", os.path.join(HERE, "strudel-song-links.mjs")],
+                           input=code, capture_output=True, text=True, timeout=30)
+    except Exception:
+        return []
+    links = [ln.split("\t", 1) for ln in (r.stdout or "").splitlines() if "\t" in ln]
+    if len(links) < 2:
+        return []
+    lines = ["🎶 **Section links** — click to play each part:"]
+    lines += [f"▶ {n.strip()}: {l.strip()}" for n, l in links]
+    if say:
+        lines.append(f'🎤 vocal ({voice or "ash"}): "{say}"')
+    msgs, cur = [], ""                                # pack lines into < 2000-char messages
+    for ln in lines:
+        if cur and len(cur) + len(ln) + 1 > 1900:
+            msgs.append(cur); cur = ""
+        cur += ("\n" if cur else "") + ln
+    if cur:
+        msgs.append(cur)
+    return msgs
 
 def api(path, method="GET", body=None):
     data = json.dumps(body).encode() if body is not None else None
@@ -82,8 +114,10 @@ def cycle(send):
             say = vm.group(2).strip().strip('"“”\'') if vm else None
             voice = (vm.group(1) or "").lower() if vm else ""
             voice = voice if voice in VOICES else "ash"        # validate; default warm 'ash'
+            secmsgs = section_messages(code, say, voice)   # per-section links for a full song (else [])
             kind = f'voice[{voice}]+"{say[:32]}"' if say else "instrumental"
-            print(f"  ch {ch} msg {m['id']}: Strudel block ({len(code)} chars, {kind}) -> "
+            extra = f" (+{len(secmsgs)} section-link msg)" if secmsgs else ""
+            print(f"  ch {ch} msg {m['id']}: Strudel block ({len(code)} chars, {kind}){extra} -> "
                   + ("delivering" if send else "WOULD deliver"))
             if send:
                 with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
@@ -95,6 +129,8 @@ def cycle(send):
                     else:     # instrumental (unchanged path)
                         cmd = [os.path.join(HERE, "strudel-deliver.sh"), path, ch, "--send"]
                     subprocess.run(cmd, check=True)
+                    for msg in secmsgs:   # then the clickable per-section links (+ the spoken words)
+                        api(f"/channels/{ch}/messages", "POST", {"content": msg})
                 except subprocess.CalledProcessError as e:
                     print(f"    deliver failed (likely render gate) — skipped: {e}")
                 finally:
