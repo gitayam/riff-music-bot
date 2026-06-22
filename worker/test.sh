@@ -32,12 +32,17 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 BASE = 'setcpm(120/4)\nstack(sound("bd*4"))'
 MOD  = 'setcpm(120/4)\nstack(sound("bd*4").bank("RolandTR909"))'
 FAIL = 'setcpm(120/4)\nstack(sound("BOOMFAIL"))'   # passes validation but the render mock 500s on it
+VOCAB = ["dark","bright","minor","major","happy","heavy","chill","fast"]
 class H(BaseHTTPRequestHandler):
     def log_message(self,*a): pass
     def do_POST(self):
         n=int(self.headers.get("Content-Length","0")); req=self.rfile.read(n).decode("utf8","ignore")
-        code = MOD if "Apply this change" in req else (FAIL if "FAILME" in req else BASE)
-        body=json.dumps({"choices":[{"message":{"content":f"Here you go:\n```javascript\n{code}\n```"}}]}).encode()
+        if self.path.endswith("/embeddings"):   # deterministic bag-of-keywords vector → testable ranking
+            low=req.lower(); vec=[1.0 if w in low else 0.0 for w in VOCAB]
+            body=json.dumps({"data":[{"embedding":vec}]}).encode()
+        else:
+            code = MOD if "Apply this change" in req else (FAIL if "FAILME" in req else BASE)
+            body=json.dumps({"choices":[{"message":{"content":f"Here you go:\n```javascript\n{code}\n```"}}]}).encode()
         self.send_response(200); self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
 HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
@@ -92,6 +97,7 @@ wrangler dev --port "$PORT" --inspector-port 0 --ip 127.0.0.1 --persist-to "$STA
   --var "OPENAI_BASE_URL:http://127.0.0.1:$MOCKPORT" \
   --var "DISCORD_PUBLIC_KEY:$DPUB" --var "DISCORD_API_BASE:http://127.0.0.1:$DPORT" \
   --var "RENDER_SERVICE_URL:http://127.0.0.1:$RPORT" \
+  --var "EMBED_TRACKS:true" \
   >/tmp/worker-dev.$$ 2>&1 </dev/null & DEV_PID=$!
 
 cleanup(){ kill "$DEV_PID" "$MOCK_PID" "$DMOCK_PID" "$RMOCK_PID" 2>/dev/null; wait "$DEV_PID" 2>/dev/null;
@@ -204,6 +210,31 @@ post /render '{"code":"setcpm(120/4)\nstack(sound(\"BOOMFAIL bd*4\"))","format":
 { [ "$CODE" = 200 ] && has '"audio_url":null' && has '"render_error"'; } \
   && ok "render failure degrades → audio_url null + render_error" || bad "render degrade (code=$CODE)"
 rm -f /tmp/worker-audio.$$
+
+# "More like this" (embeddings → cosine). EMBED_TRACKS=true; the mock embeds a bag-of-keywords vector.
+post /generate '{"prompt":"a happy bright major loop","session_id":"sa"}'; [ "$CODE" = 200 ] || bad "embed seed sa ($CODE)"
+post /generate '{"prompt":"a dark heavy minor loop","session_id":"sb"}';  [ "$CODE" = 200 ] || bad "embed seed sb ($CODE)"
+
+post /similar '{"text":"dark gloomy minor vibes","limit":5}'
+{ [ "$CODE" = 200 ] && has '"matches"' && printf '%s' "$RESP" | grep -o '"prompt":"[^"]*"' | head -1 | grep -q "dark heavy minor"; } \
+  && ok "POST /similar text → ranks the dark/minor track first" || bad "similar text (code=$CODE)"
+
+# similar-to-a-track: use sb's id (from history), expect sb excluded and sa returned
+get "/history?session_id=sb"
+SB_ID=$(printf '%s' "$RESP" | grep -o '"id":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')
+post /similar "{\"track_id\":\"$SB_ID\",\"limit\":5}"
+{ [ "$CODE" = 200 ] && has "happy bright major" && ! printf '%s' "$RESP" | grep -q "\"id\":\"$SB_ID\""; } \
+  && ok "POST /similar track_id → excludes self, returns others" || bad "similar track_id (code=$CODE id=$SB_ID)"
+
+post /similar '{"track_id":"no-such-track"}'
+[ "$CODE" = 404 ] && ok "POST /similar unknown track_id → 404" || bad "similar 404 ($CODE)"
+
+post /similar '{}'
+[ "$CODE" = 400 ] && ok "POST /similar without text/track_id → 400" || bad "similar 400 ($CODE)"
+
+# /history must NOT leak the bulky embedding blob
+get "/history?session_id=sb"
+{ [ "$CODE" = 200 ] && ! has '"embedding"'; } && ok "GET /history strips the embedding blob" || bad "history embedding leak"
 
 # Retention cron: backdate a row, fire scheduled(), confirm it's pruned and recent rows survive.
 # (wrangler d1 execute on the same local DB while dev runs can hit a lock; tolerate that → wiring-only.)

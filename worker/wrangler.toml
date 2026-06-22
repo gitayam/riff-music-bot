@@ -12,6 +12,8 @@ compatibility_date = "2026-06-01"
 OPENAI_MODEL = "gpt-5.4"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 RETENTION_DAYS = "30"   # tracks older than this are pruned by the daily cron (D1 10 GB cap)
+EMBED_TRACKS = "false"  # "true" → embed each track for /similar ("more like this"). Off = per-write
+EMBEDDINGS_MODEL = "text-embedding-3-small"   #   API cost avoided; the similarity feature is dormant.
 DISCORD_API_BASE = "https://discord.com/api/v10"   # interaction follow-ups (PATCH @original)
 # PUBLIC_BASE_URL = "https://music.example.com"     # the Worker's own origin; lets the Discord path
 #   record an absolute audio_url in history (the rendered mp3 is attached to the message regardless).

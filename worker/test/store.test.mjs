@@ -28,12 +28,19 @@ test("buildTrackRow fills every column (?? null), id/created_at injectable", () 
   assert.deepEqual(row, {
     id: "id1", session_id: "s1", prompt: null, instruction: "darker", source: "modify",
     strudel_code: "stack(sound(\"bd*4\"))", share_url: "https://strudel.cc/#x",
-    audio_url: "https://r/audio/tracks/id1.mp3", parent_id: "p1", version: 3, created_at: 123,
+    audio_url: "https://r/audio/tracks/id1.mp3", embedding: null, parent_id: "p1", version: 3, created_at: 123,
   });
 });
 
-test("buildTrackRow defaults audio_url to null", () => {
-  assert.equal(buildTrackRow({ strudel_code: "x", share_url: "y" }, "id3", 1).audio_url, null);
+test("buildTrackRow defaults audio_url + embedding to null", () => {
+  const r = buildTrackRow({ strudel_code: "x", share_url: "y" }, "id3", 1);
+  assert.equal(r.audio_url, null);
+  assert.equal(r.embedding, null);
+});
+
+test("buildTrackRow serializes an embedding array to JSON, passes a string through", () => {
+  assert.equal(buildTrackRow({ strudel_code: "x", share_url: "y", embedding: [1, 2, 3] }, "i", 1).embedding, "[1,2,3]");
+  assert.equal(buildTrackRow({ strudel_code: "x", share_url: "y", embedding: "[4,5]" }, "i", 1).embedding, "[4,5]");
 });
 
 test("buildTrackRow defaults source=generate, version=1, nulls", () => {

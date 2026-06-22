@@ -19,6 +19,7 @@ the hard part (headless-Chromium render in a Container).
 | `POST /generate` | `{prompt, session_id?, repair_attempts?=2}` | `{prompt, session_id, strudel_code, share_url, audio_url:null, version, parent_id, engine}` |
 | `POST /modify` | `{session_id, instruction, repair_attempts?=2}` | `{strudel_code, share_url, diff, version, parent_id, …}` — edits the session's latest version |
 | `POST /render` | `{code, session_id?}` | same shape (validates + links code you already have; never rewrites it) |
+| `POST /similar` | `{text \| track_id, limit?=5}` | `{matches:[…]}` — "more like this" by embedding cosine similarity (bearer-gated) |
 | `GET /history` | `?session_id=…&limit=…` | `{tracks:[…]}` — cross-session history from D1, newest first (bearer-gated) |
 | `GET /audio/<key>` | — | serves a rendered audio file from R2 (public) |
 | `POST /discord/interactions` | Discord Interaction (Ed25519-signed) | PING→PONG; slash command→deferred ack, then a follow-up with code + ▶ link |
@@ -43,6 +44,13 @@ bind the `AUDIO` R2 bucket, and the Worker renders real audio: `/render` (and `/
 to `audio_url:null` + a `render_error` field (you always get the code + play link). Unset
 `RENDER_SERVICE_URL` → Tier-A (code + link only). Locally, run `../container/server.mjs` as the backend
 and `wrangler dev` provides a local R2 — the whole path is testable without an account.
+
+**"More like this" (P2):** set `EMBED_TRACKS=true` and each new track is embedded (OpenAI
+`text-embedding-3-small`, stored in the `tracks.embedding` column). `POST /similar {text}` or
+`{track_id}` embeds the query and ranks stored tracks by **cosine similarity** in the Worker, returning
+the top matches (e.g. "remix the vibe of that track"). Embedding-on-write is **best-effort** + **opt-in**
+(off = the feature is dormant, no per-write API cost). At scale, swap the in-Worker scan for a **Vectorize**
+ANN query — the `/similar` contract stays the same; D1 holds the metadata either way.
 
 **History + retention (D1):** every generate/modify/render is logged as a `tracks` row (Contract 5),
 queryable via `GET /history` (optionally scoped to a `session_id`). Persistence is **best-effort** — a D1
@@ -87,6 +95,8 @@ Gateway** in prod for caching + rate-limit + cost observability) are non-secret 
   daemon; the Container/Queue bindings need a Workers Paid account.
 - **Native Discord voice-message bubble.** The Discord follow-up attaches the mp3 (plays inline); the
   waveform/scrubber "voice message" bubble (flags 8192 + waveform + Opus/OGG) is a possible polish step.
+- **Vectorize for `/similar` at scale.** The feature ships on a D1-backed cosine scan (correct for this
+  project's scale); swapping in a Vectorize ANN index is the unbounded-scale path.
 - **Registering the slash command** with Discord (one-time `PUT /applications/{id}/commands`) is an operator
   step, not code here — the webhook handler is built + tested.
 - **The authoritative `@strudel/transpiler` parse-gate** → P1 (ships with the Container). `validateStrudel()`

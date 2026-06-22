@@ -20,7 +20,8 @@ import {
   modifyUserContent, diffString, audioFormat, audioKey, audioUrlFor, audioContentType,
 } from "./lib.js";
 import { Session } from "./session.js";
-import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec } from "./store.js";
+import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec, embeddedTracks, trackById } from "./store.js";
+import { rankBySimilarity, parseEmbedding } from "./similar.js";
 import {
   T, verifyInteractionSignature, commandPrompt, interactionSessionId, followupUrl, followupContent,
 } from "./discord.js";
@@ -159,6 +160,34 @@ function wantsRender(path, req) {
   return path === "/render" ? req.render !== false : req.render === true;
 }
 
+// Embed text for "more like this" (OpenAI embeddings). BEST-EFFORT — returns a float[] or null, never
+// throws. Gated by EMBED_TRACKS (off by default, since it's a per-write API cost); when off, the
+// similarity feature is simply dormant (no candidates).
+async function tryEmbed(env, text) {
+  if (env.EMBED_TRACKS !== "true" || !env.OPENAI_API_KEY || !text) return null;
+  const base = (env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
+  const model = env.EMBEDDINGS_MODEL || "text-embedding-3-small";
+  try {
+    const r = await fetch(`${base}/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+      body: JSON.stringify({ model, input: String(text).slice(0, 8000) }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const v = d?.data?.[0]?.embedding;
+    return Array.isArray(v) && v.length ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// The text we embed for a track — the musical intent (prompt/instruction) plus a bit of the code.
+function embedSource(req, code, instruction) {
+  return [req?.prompt, instruction, (code || "").slice(0, 400)].filter(Boolean).join("\n");
+}
+
 async function handlePost(request, env, path) {
   // Auth — same contract as api-server.py: no token configured OR mismatch → 401.
   const auth = request.headers.get("Authorization") || "";
@@ -173,6 +202,28 @@ async function handlePost(request, env, path) {
   }
 
   try {
+    // /similar — "more like this": rank stored tracks by embedding cosine similarity to a query
+    // (free text) or to an existing track (track_id). Read-only; bearer-gated like the other POSTs.
+    if (path === "/similar") {
+      if (!env.DB) return json(503, { error: "similarity unavailable (no D1 binding)" });
+      let queryVec, excludeId = null;
+      if (req.track_id && typeof req.track_id === "string") {
+        const t = await trackById(env, req.track_id);
+        if (!t) return json(404, { error: "unknown track_id" });
+        queryVec = parseEmbedding(t.embedding);
+        excludeId = req.track_id;
+        if (!queryVec) return json(422, { error: "that track has no embedding (EMBED_TRACKS was off when it was created)" });
+      } else if (req.text && typeof req.text === "string") {
+        queryVec = await tryEmbed(env, req.text);
+        if (!queryVec) return json(503, { error: "embeddings unavailable (EMBED_TRACKS off or embed failed)" });
+      } else {
+        return json(400, { error: "provide 'text' or 'track_id'" });
+      }
+      const cands = (await embeddedTracks(env, 500)).map((t) => ({ ...t, embedding: parseEmbedding(t.embedding) }));
+      const matches = rankBySimilarity(queryVec, cands, req.limit || 5, (c) => c.id === excludeId);
+      return json(200, { matches });
+    }
+
     // /modify is stateful (loads + edits the session's last version) → handled on its own.
     if (path === "/modify") {
       if (!req.session_id || typeof req.session_id !== "string") return json(400, { error: "missing 'session_id'" });
@@ -184,12 +235,13 @@ async function handlePost(request, env, path) {
       const share = shareUrl(code);
       const trackId = newId();
       const rendered = await tryRender(env, { code, cycles: req.cycles, format: req.format, id: trackId, requestUrl: request.url, want: wantsRender(path, req) });
+      const embedding = await tryEmbed(env, embedSource(req, code, req.instruction));
       // Persist FIRST (so the D1 row id can be stored in the DO version for parent-linking), then
       // append to the DO. Both happen only after composeValid succeeded — an invalid modify (422)
       // never advances the chain.
       await insertTrack(env, buildTrackRow({
         session_id: req.session_id, instruction: req.instruction, source: "modify", strudel_code: code,
-        share_url: share, audio_url: rendered.audio_url ?? null, parent_id: prev.track_id ?? null, version: prev.version + 1,
+        share_url: share, audio_url: rendered.audio_url ?? null, embedding, parent_id: prev.track_id ?? null, version: prev.version + 1,
       }, trackId));
       const version = await stub.append({ code, share_url: share, source: "modify", instruction: req.instruction, track_id: trackId });
       return json(200, {
@@ -232,10 +284,11 @@ async function handlePost(request, env, path) {
     // Render to audio if wanted + wired (P1): /render renders by default, /generate on req.render===true.
     const trackId = newId();
     const rendered = await tryRender(env, { code, cycles: req.cycles, format: req.format, id: trackId, requestUrl: request.url, want: wantsRender(path, req) });
+    const embedding = await tryEmbed(env, embedSource(req, code, null));
     // Persist to D1 (cross-session history), then record the D1 id in the session's modify chain.
     await insertTrack(env, buildTrackRow({
       session_id: req.session_id ?? null, prompt: req.prompt ?? null, source,
-      strudel_code: code, share_url: share, audio_url: rendered.audio_url ?? null, parent_id: parentTrackId, version,
+      strudel_code: code, share_url: share, audio_url: rendered.audio_url ?? null, embedding, parent_id: parentTrackId, version,
     }, trackId));
     if (req.session_id && typeof req.session_id === "string") {
       await sessionStub(env, req.session_id).append({ code, share_url: share, source, instruction: null, track_id: trackId });
@@ -363,10 +416,11 @@ export default {
         if (!env.DB) return json(503, { error: "history unavailable (no D1 binding)" });
         const u = new URL(request.url);
         try {
-          const tracks = await recentTracks(env, {
+          const rows = await recentTracks(env, {
             session_id: u.searchParams.get("session_id"),
             limit: u.searchParams.get("limit"),
           });
+          const tracks = rows.map(({ embedding, ...t }) => t); // don't ship the bulky embedding blob
           return json(200, { tracks });
         } catch (e) {
           return json(500, { error: "history query failed", detail: String(e.message || e) });
@@ -380,6 +434,7 @@ export default {
             "POST /generate": "{prompt, session_id?, render?=false, format?, repair_attempts?=2} → {strudel_code, share_url, audio_url, version, session_id} (prompt → Strudel via gpt-5.4; render:true also renders audio when the render service is wired)",
             "POST /modify": "{session_id, instruction, render?=false, repair_attempts?=2} → {strudel_code, share_url, diff, audio_url, version, parent_id} (edits the session's latest version — 'faster' / 'darker' — and returns the code diff)",
             "POST /render": "{code, session_id?, format?=mp3} → renders to audio (audio_url) when the render service is wired, else validates + links",
+            "POST /similar": "{text | track_id, limit?=5} → {matches:[…]} — 'more like this' by embedding cosine similarity (needs EMBED_TRACKS)",
             "GET /audio/<key>": "serves a rendered audio file from R2 (public)",
             "GET /history": "?session_id=…&limit=…(≤100, default 20) → {tracks:[…]} (cross-session history from D1, newest first)",
             "POST /discord/interactions": "Discord Interactions webhook (Ed25519-signed, not bearer): PING→PONG, slash command→deferred ack then a follow-up with code + ▶ link",

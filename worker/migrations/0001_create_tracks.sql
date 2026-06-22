@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   strudel_code TEXT NOT NULL,
   share_url    TEXT NOT NULL,
   audio_url    TEXT,
+  embedding    TEXT,   -- JSON float[] for "more like this" (Vectorize is the scale-up path)
   parent_id    TEXT,
   version      INTEGER NOT NULL DEFAULT 1,
   created_at   INTEGER NOT NULL

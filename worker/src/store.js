@@ -17,6 +17,7 @@ export const SCHEMA_STMTS = [
      strudel_code TEXT NOT NULL,
      share_url    TEXT NOT NULL,
      audio_url    TEXT,
+     embedding    TEXT,
      parent_id    TEXT,
      version      INTEGER NOT NULL DEFAULT 1,
      created_at   INTEGER NOT NULL
@@ -51,6 +52,7 @@ export function buildTrackRow(p, id, createdAt) {
     strudel_code: p.strudel_code,
     share_url: p.share_url,
     audio_url: p.audio_url ?? null,
+    embedding: p.embedding != null ? (typeof p.embedding === "string" ? p.embedding : JSON.stringify(p.embedding)) : null,
     parent_id: p.parent_id ?? null,
     version: p.version ?? 1,
     created_at: createdAt ?? nowSec(),
@@ -77,11 +79,11 @@ export async function insertTrack(env, row) {
   try {
     await ensureSchema(env.DB);
     await env.DB.prepare(
-      `INSERT INTO tracks (id, session_id, prompt, instruction, source, strudel_code, share_url, audio_url, parent_id, version, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO tracks (id, session_id, prompt, instruction, source, strudel_code, share_url, audio_url, embedding, parent_id, version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       row.id, row.session_id, row.prompt, row.instruction, row.source,
-      row.strudel_code, row.share_url, row.audio_url, row.parent_id, row.version, row.created_at
+      row.strudel_code, row.share_url, row.audio_url, row.embedding, row.parent_id, row.version, row.created_at
     ).run();
     return row.id;
   } catch (e) {
@@ -99,6 +101,24 @@ export async function recentTracks(env, { session_id, limit } = {}) {
     : env.DB.prepare(`SELECT * FROM tracks ORDER BY created_at DESC LIMIT ?`).bind(lim);
   const { results } = await stmt.all();
   return results || [];
+}
+
+// Candidate tracks that have an embedding, newest first (the in-Worker similarity scan set).
+// Bounded by `limit` so a large table can't blow the request — Vectorize is the unbounded scale path.
+export async function embeddedTracks(env, limit = 500) {
+  await ensureSchema(env.DB);
+  const lim = Math.max(1, Math.min(2000, parseInt(limit, 10) || 500));
+  const { results } = await env.DB
+    .prepare(`SELECT * FROM tracks WHERE embedding IS NOT NULL ORDER BY created_at DESC LIMIT ?`)
+    .bind(lim).all();
+  return results || [];
+}
+
+// One track by id (for GET /similar?track_id=… — "more like THIS track").
+export async function trackById(env, id) {
+  await ensureSchema(env.DB);
+  const { results } = await env.DB.prepare(`SELECT * FROM tracks WHERE id = ? LIMIT 1`).bind(id).all();
+  return (results && results[0]) || null;
 }
 
 // Delete tracks older than `days`. Returns the number pruned. Best-effort (no DB → 0).
