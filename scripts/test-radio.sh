@@ -53,4 +53,20 @@ grep -q '#EXTM3U' "$tmp/g.m3u8" 2>/dev/null && chk "serve: stream.m3u8 served ov
 curl -sf "http://localhost:$P/radio.html" 2>/dev/null | grep -qi 'stream.m3u8' && chk "serve: player page served + references the stream" 1 || chk "serve: player page served" 0
 wait "$spid" 2>/dev/null || true
 
-echo; [ "$fails" = 0 ] && { echo "PASS — radio: evolving, rolling-window, valid HLS, browser-playable"; exit 0; } || { echo "$fails FAILED"; exit 1; }
+# ── steering: a steer hint biases the next segments (deterministic), output stays valid ──
+darkmode=1
+for k in 0 1 2 3; do
+  RADIO_STEER='darker' node "$here/radio-compose.mjs" "$k" | grep -oE 'scale\("[A-G][#b]?[0-9]:[a-z]+"' \
+    | grep -qE 'phrygian|aeolian|minor' || darkmode=0
+done
+chk "steer 'darker' → a dark mode every segment" "$darkmode"
+bf="$(RADIO_STEER='faster' node "$here/radio-compose.mjs" 0 | grep -oE 'setcpm\([0-9]+' | grep -oE '[0-9]+')"
+bn="$(node "$here/radio-compose.mjs" 0 | grep -oE 'setcpm\([0-9]+' | grep -oE '[0-9]+')"
+{ [ "${bf:-0}" -gt "${bn:-999}" ]; } && chk "steer 'faster' raises bpm vs unsteered (base $bn, fast $bf)" 1 || chk "steer 'faster' raises bpm" 0
+RADIO_STEER='darker faster hard' node "$here/radio-compose.mjs" 2 > "$tmp/st.js"
+node "$here/render/render.mjs" "$(cat "$tmp/st.js")" "$tmp/st.wav" 1 >/dev/null 2>&1 && chk "steered segment still passes the parse-gate" 1 || chk "steered segment gates" 0
+mkdir -p "$tmp/st2"; echo "darker faster" > "$tmp/st2/steer"
+so="$("$here/radio.sh" "$tmp/st2" --max-segments 1 --cycles 1 2>&1 || true)"
+echo "$so" | grep -q "steer=darker faster" && chk "radio.sh re-reads the steer file + applies it" 1 || chk "radio.sh reads steer file" 0
+
+echo; [ "$fails" = 0 ] && { echo "PASS — radio: evolving, steerable, rolling-window, valid HLS, browser-playable"; exit 0; } || { echo "$fails FAILED"; exit 1; }

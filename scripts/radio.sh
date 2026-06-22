@@ -14,6 +14,8 @@
 #
 # Demo:    scripts/radio.sh /tmp/radio --serve --window 12     # then open the printed player URL
 # Listen:  ffplay http://localhost:8123/stream.m3u8  (or VLC / Safari).  Ctrl-C stops it.
+# Steer:   echo a hint into <outdir>/steer and the NEXT segments follow it (re-read each segment) —
+#          e.g.  echo 'darker faster' > /tmp/radio/steer   (words: dark/bright, fast/slow, dense/sparse)
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
@@ -64,7 +66,9 @@ fi
 
 i=0
 while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
-  code="$(node "$compose" "$i")"
+  # live steering: re-read <outdir>/steer each segment so an edit nudges the stream from the next one
+  steer=""; [ -f "$outdir/steer" ] && steer="$(head -1 "$outdir/steer" 2>/dev/null | tr -d '\r\n')"
+  code="$(RADIO_STEER="$steer" node "$compose" "$i")"
   # Each stage skips (not aborts) on failure — a continuous radio must not die on one bad segment.
   if ! node "$gate" "$code" "$work/g.wav" 1 >/dev/null 2>&1; then
     echo "[radio] seed $i failed the gate — skipping" >&2; i=$((i+1)); continue; fi
@@ -82,7 +86,7 @@ while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
     old="${entries[0]%%|*}"; rm -f "$outdir/$old"; entries=("${entries[@]:1}"); media_seq=$((media_seq+1))
   fi
   write_playlist
-  echo "[radio] + $seg (${dur}s)" >&2
+  echo "[radio] + $seg (${dur}s)${steer:+ · steer=$steer}" >&2
   i=$((i+1))
 done
 # A bounded run is a finished VOD; a live (forever) run is left open for players to keep polling.
