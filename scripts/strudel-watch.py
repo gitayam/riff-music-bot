@@ -148,17 +148,27 @@ def channels():
         print(f"  note: watching {len(out)} channels — set STRUDEL_WATCH_CHANNELS to restrict if rate-limited")
     return out
 
+# channels the bot can't read (403/401) — cached in-memory so we stop re-polling them every cycle
+# (we now watch every channel the bot is in; many are private/mod-only). Reset on restart, which
+# re-checks them (catches a later permission grant).
+_INACCESSIBLE = set()
+
 def cycle(send):
     me = api("/users/@me"); bot_id = me["id"]
     state = load_state()
-    chans = channels()
-    print(f"watching {len(chans)} channel(s) as {me['username']} (send={'ON' if send else 'DRY RUN'})")
+    chans = [c for c in channels() if c not in _INACCESSIBLE]
+    extra = f", {len(_INACCESSIBLE)} skipped (no access)" if _INACCESSIBLE else ""
+    print(f"watching {len(chans)} channel(s){extra} as {me['username']} (send={'ON' if send else 'DRY RUN'})")
     for ch in chans:
         last = state.get(ch)
         try:
             msgs = api(f"/channels/{ch}/messages?limit=25" + (f"&after={last}" if last else ""))
         except urllib.error.HTTPError as e:
-            print(f"  ch {ch}: skip ({e.code})"); continue
+            if e.code in (401, 403):                                # no read access → cache, stop re-polling it
+                _INACCESSIBLE.add(ch); print(f"  ch {ch}: no access ({e.code}) — won't re-poll until restart")
+            else:
+                print(f"  ch {ch}: skip ({e.code})")
+            continue
         msgs = sorted(msgs, key=lambda m: int(m["id"]))            # oldest -> newest
         if last is None:                                            # first sight: arm to latest, DON'T replay.
             # We now watch ~every channel the bot is in, so replaying backlog would bulk-deliver old

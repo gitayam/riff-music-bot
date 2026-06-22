@@ -82,8 +82,27 @@ _ch = sw.channels()
 sw.api = _orig_api
 check("channels() discovers all guilds' channels+threads, merges explicit, dedups", _ch == ["111", "222", "444", "333"])
 
+# 403/401 channels are cached so the watcher stops re-polling them every cycle (62-channel load)
+import urllib.error, io, contextlib
+sw._INACCESSIBLE.clear()
+_orig = (sw.api, sw.channels, sw.load_state, sw.save_state)
+def _api403(p, *a, **k):
+    if p == "/users/@me": return {"id": "bot", "username": "z"}
+    if "/messages" in p: raise urllib.error.HTTPError(p, 403, "Forbidden", {}, None)
+    return []
+sw.api = _api403; sw.channels = lambda: ["chX", "chY"]
+sw.load_state = lambda: {"chX": "1", "chY": "1"}; sw.save_state = lambda s: None
+with contextlib.redirect_stdout(io.StringIO()):
+    sw.cycle(False)                                  # both 403 → cached
+_got = set(sw._INACCESSIBLE)
+# next cycle should skip them (channels() returns them but they're filtered out before any fetch)
+with contextlib.redirect_stdout(io.StringIO()):
+    sw.cycle(False)
+sw.api, sw.channels, sw.load_state, sw.save_state = _orig
+sw._INACCESSIBLE.clear()
+check("cycle() caches 403/401 channels as inaccessible (stops re-polling)", _got == {"chX", "chY"})
+
 # api(): a transient DNS/URLError blip is retried (not fatal — this is what wedged the watcher)
-import urllib.error
 _calls = {"n": 0}
 class _R:
     def __enter__(self): return self
