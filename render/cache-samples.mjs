@@ -4,12 +4,14 @@
 //   node cache-samples.mjs            # download + write cache (idempotent; skips files already present)
 //   node cache-samples.mjs --force    # re-download even if present
 //
-// Downloads the RolandTR909 + RolandTR808 drum-machine banks and the piano pack (the soul's
-// default kits) into render/samples-cache/ (gitignored), and writes cache-local sample maps
-// whose _base points at the local files with a leading-slash path (port-/base-agnostic).
+// Downloads the soul's default kits into render/samples-cache/ (gitignored) and writes
+// cache-local sample maps whose _base is a leading-slash path (port-/base-agnostic):
+//   • RolandTR909 + RolandTR808 drum-machine banks (from the vendored tidal-drum-machines.json)
+//   • piano                                         (from the vendored piano.json)
+//   • dirt-samples CORE drums (bare bd/hh/sd/…)      (fetched from the dirt strudel.json)
 // strudel-render.mjs's static server serves these cached maps in place of the remote-pointing
-// vendored maps, so a network blip can no longer blank the drums. (Bare bd/hh/sd → dirt-samples
-// is a separate, larger follow-up.) Run by setup.sh; safe to re-run. Needs Node 18+ (global fetch).
+// ones, so a network blip can no longer blank the drums. Run by setup.sh; safe to re-run.
+// Needs Node 18+ (global fetch).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,28 +21,52 @@ const CACHE = path.join(HERE, 'samples-cache');
 const FORCE = process.argv.includes('--force');
 const CONCURRENCY = 8;
 const BANK_PREFIXES = ['RolandTR909', 'RolandTR808'];   // which drum machines to cache
+const DIRT_MAP_URL = 'https://raw.githubusercontent.com/tidalcycles/dirt-samples/main/strudel.json';
+// core drum names worth caching (intersected with what the dirt map actually has)
+const DIRT_CORE = ['bd', 'sd', 'sn', 'hh', 'oh', 'cp', 'rim', 'rs', 'lt', 'mt', 'ht',
+                   'cr', 'cb', 'perc', 'hc', 'sh', 'cy', 'click', 'co'];
 
 const readMap = (f) => JSON.parse(fs.readFileSync(path.join(HERE, f), 'utf8'));
 
 // Build the download list [{url,dest}] + the rewritten cache-local maps (leading-slash _base).
-function plan() {
+async function plan() {
   const jobs = [];
 
+  // --- drum machines (filter to the wanted banks; map is vendored same-origin) ---
   const dm = readMap('tidal-drum-machines.json');
   const dmBase = dm._base.replace(/\/$/, '') + '/';
   const localDm = { _base: '/samples-cache/drum-machines/' };
   for (const [bank, files] of Object.entries(dm)) {
     if (bank === '_base' || !BANK_PREFIXES.some((p) => bank.startsWith(p))) continue;
-    localDm[bank] = files;                                       // same relative paths
+    localDm[bank] = files;
     for (const rel of files) jobs.push({ url: dmBase + rel, dest: path.join(CACHE, 'drum-machines', rel) });
   }
 
+  // --- piano (map is vendored same-origin) ---
   const pn = readMap('piano.json');
   const pnBase = pn._base.replace(/\/$/, '') + '/';
   const localPn = { _base: '/samples-cache/piano/', piano: pn.piano };
   for (const rel of Object.values(pn.piano)) jobs.push({ url: pnBase + rel, dest: path.join(CACHE, 'piano', rel) });
 
-  return { jobs, localDm, localPn };
+  // --- dirt core drums (map must be fetched; non-fatal if offline) ---
+  let localDirt = null;
+  try {
+    const res = await fetch(DIRT_MAP_URL);
+    if (!res.ok) throw new Error(`${res.status} dirt strudel.json`);
+    const dirt = await res.json();
+    const dirtBase = (dirt._base || DIRT_MAP_URL.replace(/strudel\.json$/, '')).replace(/\/$/, '') + '/';
+    localDirt = { _base: '/samples-cache/dirt/' };
+    for (const name of DIRT_CORE) {
+      const files = dirt[name];
+      if (!Array.isArray(files)) continue;          // name not in this dirt build
+      localDirt[name] = files;
+      for (const rel of files) jobs.push({ url: dirtBase + rel, dest: path.join(CACHE, 'dirt', rel) });
+    }
+  } catch (e) {
+    console.error('  • dirt map unavailable (' + e.message + ') — caching banks+piano only; bare bd/hh/sd stay online');
+  }
+
+  return { jobs, localDm, localPn, localDirt };
 }
 
 async function download({ url, dest }) {
@@ -67,8 +93,8 @@ async function pool(jobs, n, fn) {
 }
 
 async function main() {
-  const { jobs, localDm, localPn } = plan();
-  console.error(`caching ${jobs.length} sample files (909+808+piano) → ${CACHE}`);
+  const { jobs, localDm, localPn, localDirt } = await plan();
+  console.error(`caching ${jobs.length} sample files (909+808+piano${localDirt ? '+dirt' : ''}) → ${CACHE}`);
   const res = await pool(jobs, CONCURRENCY, download);
   const got = res.filter((r) => r.ok && r.kind === 'get').length;
   const skip = res.filter((r) => r.ok && r.kind === 'skip').length;
@@ -76,6 +102,7 @@ async function main() {
   fs.mkdirSync(CACHE, { recursive: true });
   fs.writeFileSync(path.join(CACHE, 'tidal-drum-machines.json'), JSON.stringify(localDm, null, 2));
   fs.writeFileSync(path.join(CACHE, 'piano.json'), JSON.stringify(localPn, null, 2));
+  if (localDirt) fs.writeFileSync(path.join(CACHE, 'dirt.json'), JSON.stringify(localDirt, null, 2));
   console.error(`✓ downloaded ${got}, skipped ${skip}, failed ${fail.length}; wrote cache maps`);
   if (fail.length) { fail.slice(0, 5).forEach((f) => console.error('  FAIL', f.err)); process.exit(1); }
 }

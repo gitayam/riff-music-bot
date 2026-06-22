@@ -63,7 +63,7 @@ function serve(root) {
       // Offline sample cache: serve the cache-local maps (local _base) in place of the
       // remote-pointing vendored maps when cache-samples.mjs has populated samples-cache/.
       const base = path.basename(p);
-      if (base === 'tidal-drum-machines.json' || base === 'piano.json') {
+      if (base === 'tidal-drum-machines.json' || base === 'piano.json' || base === 'dirt.json') {
         const cached = path.join(root, 'samples-cache', base);
         if (fs.existsSync(cached)) p = cached;
       }

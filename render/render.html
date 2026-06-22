@@ -27,8 +27,14 @@ window.__strudelReady = (async () => {
   // MAP is vendored same-origin (strudel.cc's copy sends no CORS) with _base pointing at
   // the CORS-enabled geikha raw host where the wavs actually live.
   const load = (label, p) => p.then(() => label + ' ok').catch((e) => label + ' FAIL: ' + e.message);
+  // try each source in order, first that resolves wins (local cache → remote fallback)
+  const loadFirst = (label, ...thunks) =>
+    thunks.reduce((acc, t) => acc.catch(() => t()), Promise.reject(new Error('init')))
+          .then(() => label + ' ok').catch((e) => label + ' FAIL: ' + e.message);
   window.__samplesStatus = await Promise.all([
-    load('dirt', samples('github:tidalcycles/dirt-samples')),     // bd hh sd cp rim …
+    // dirt (bare bd hh sd cp …): the server serves ./dirt.json from samples-cache when cached
+    // (offline); otherwise it 404s and we fall back to the github pack (online).
+    loadFirst('dirt', () => samples('./dirt.json'), () => samples('github:tidalcycles/dirt-samples')),
     load('drum-machines', samples('./tidal-drum-machines.json')), // .bank("RolandTR909"/"RolandTR808"/…)
     load('piano', samples('./piano.json')),                       // sound("piano")
   ]);

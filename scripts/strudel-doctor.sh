@@ -94,6 +94,22 @@ else
   meh "no sample cache → drums still need network. Run: (cd render && node cache-samples.mjs) for offline drums"
 fi
 
+echo "── offline dirt drums (bare bd/hh/cp from the cached dirt pack, network blocked)"
+if [ -f "$root/render/samples-cache/dirt.json" ]; then
+  _dd=/tmp/_doc_dirt.wav; rm -f "$_dd"
+  if printf '%s' 'stack(sound("bd*4").gain(0.9), sound("~ cp").gain(0.7), sound("hh*8").gain(0.4))' \
+       | STRUDEL_BLOCK_EXTERNAL=1 timeout 150 node "$root/render/strudel-render.mjs" "$_dd" 2 >/dev/null 2>&1 \
+     && peak=$(node "$root/render/strudel-waveform.mjs" "$_dd" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const b=Buffer.from(JSON.parse(s).waveform_b64,"base64");let m=0;for(const v of b)m=v>m?v:m;console.log(m)}catch{console.log(0)}})') \
+     && [ "${peak:-0}" -gt 60 ]; then
+    ok "bare dirt drums render offline from cache (peak ${peak}/255)"
+  else
+    no "offline dirt render silent/failed → run '(cd render && node cache-samples.mjs)'"
+  fi
+  rm -f "$_dd"
+else
+  meh "no dirt cache → bare bd/hh/sd need network. Run: (cd render && node cache-samples.mjs)"
+fi
+
 echo "── full chain smoke test (gate → faithful render → ogg → waveform; ~15s, posts nothing)"
 if [ -d "$root/render/node_modules" ] && command -v ffmpeg >/dev/null; then
   smoke='setcpm(120/4)
