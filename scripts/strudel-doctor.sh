@@ -31,6 +31,9 @@ if node "$here/render/render.mjs" '[stack(sound("bd"))]' /tmp/_doc_b.wav 1 >/dev
 echo "── soul / capabilities"
 [ -f "$root/souls/hermes.SOUL.md" ] && ok "soul present (souls/hermes.SOUL.md)" || no "soul missing"
 grep -q "what can you do" "$root/souls/hermes.SOUL.md" 2>/dev/null && ok "help menu present in soul" || no "help menu missing from soul"
+# The model copies the soul's template examples verbatim — an invalid one ships invalid output.
+if python3 "$here/test-soul-examples.py" >/dev/null 2>&1; then ok "soul Strudel examples all parse (the model copies these)"
+else no "a soul example FAILS the parse-gate → model will copy invalid code (run: python3 scripts/test-soul-examples.py)"; fi
 grep -q 'fallback' "$root/config.toml" 2>/dev/null && ok "model fallback configured" || meh "no model fallback in config.toml"
 
 echo "── Discord bot auth (read-only)"
