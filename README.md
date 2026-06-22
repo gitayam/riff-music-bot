@@ -121,6 +121,18 @@ Riff builds music the way a producer does — **in layers and sections, not one 
    and mixed locally (see [`render/VOICE-LAYER.md`](render/VOICE-LAYER.md)) — so a track can
    carry a hook, chant, or callout, not just instruments.
 
+**Both paths are working today** (verified end-to-end):
+
+```bash
+# a full multi-section song — arrange() renders all sections (auto-sized: 4+8+8+4 = 24 cycles → 48s)
+node render/strudel-render.mjs song.wav "$(scripts/strudel-cycles.sh song.js)" < song.js
+#   song.js:  setcpm(120/4)
+#             arrange([4, <intro>], [8, <verse>], [8, <chorus>], [4, <outro>])
+
+# a beat + a spoken hook over it (OpenAI TTS, mixed locally) → one voice message
+echo '<beat>' | render/voice-deliver.sh --code - --say "stay focused, you got this" --out hook.ogg
+```
+
 ## Layout
 
 | Path | What |
