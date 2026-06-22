@@ -20,6 +20,7 @@ run "cycle sizing"          bash    "$here/test-cycles.sh"
 run "soul examples parse"   python3 "$here/test-soul-examples.py"
 run "sync-API auto-repair"  python3 "$here/test-auto-repair.py"
 run "deliver auto-repair"   bash    "$here/test-deliver-repair.sh"
+run "generative radio (HLS)" bash   "$here/test-radio.sh"
 
 echo
 echo "═══════════════════════════════════════════"
