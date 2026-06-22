@@ -114,22 +114,27 @@ external_peers = ["*"]`) — tighten by replacing `"*"` with specific Discord us
 
 ## Always-on (launchd)
 
-The daemon runs as a user LaunchAgent (`com.zeroclaw.hermes`) that starts at login,
-restarts on crash, and runs via `run.sh` so it keeps the `.env` secret injection.
-Plist: [`com.zeroclaw.hermes.plist`](com.zeroclaw.hermes.plist) (copied into
-`~/Library/LaunchAgents/`). Logs → `daemon.log`.
+The three services run as user LaunchAgents that start at login and restart on crash:
+`com.zeroclaw.hermes` (bot daemon), `com.zeroclaw.strudel-watch` (voice-message delivery),
+`com.zeroclaw.music-api` (HTTP API). **One command installs all three for your machine:**
 
 ```bash
-# install / start
-cp com.zeroclaw.hermes.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.zeroclaw.hermes.plist
-
-launchctl print gui/$(id -u)/com.zeroclaw.hermes | grep state   # status
-launchctl kickstart -k gui/$(id -u)/com.zeroclaw.hermes          # restart (after config edit)
-launchctl bootout  gui/$(id -u)/com.zeroclaw.hermes              # stop + disable
+./scripts/install-services.sh        # generates plists rooted at THIS repo path + loads them
+./scripts/strudel-doctor.sh          # verify all three are up (16/16)
+./scripts/install-services.sh --uninstall   # stop + remove
 ```
 
-After editing `config.toml`, `kickstart -k` to reload.
+launchd plists require absolute paths, so `install-services.sh` **generates** them from
+wherever you cloned the repo (and your `$HOME`) — don't hand-edit the committed
+`com.zeroclaw.*.plist` files (those are this-machine examples). Manage individual services:
+
+```bash
+launchctl print     gui/$(id -u)/com.zeroclaw.hermes | grep state   # status
+launchctl kickstart -k gui/$(id -u)/com.zeroclaw.hermes              # restart (after config.toml edit)
+launchctl bootout      gui/$(id -u)/com.zeroclaw.hermes              # stop one
+```
+
+After editing `config.toml`, `kickstart -k` the affected service to reload.
 
 ## SimpleX
 
