@@ -5,6 +5,10 @@ agent runtime / personal AI assistant. Generation runs on **OpenAI GPT-5.4**
 (automatic fallback: gpt-5.4-mini → Mistral), reachable over **Discord** (native)
 and **SimpleX** (via a local bridge, since zeroclaw has no native SimpleX channel).
 
+> 📦 **Repository — commit / open PRs HERE:** <https://github.com/gitayam/riff-music-bot>
+> This is the canonical repo. It was extracted from a monorepo; any copy living under
+> `llms-local/` is a historical mirror — **do not commit there.**
+
 ## What the bot does — "Riff", the music director
 
 The `hermes` agent runs a music-director persona — **Riff**, defined in
@@ -27,6 +31,19 @@ The music brain is `souls/hermes.SOUL.md` (synced into the agent workspace by `r
 launch); the full cited theory + per-genre Strudel recipes are in
 [`docs/music-theory-for-zeroclaw.md`](docs/music-theory-for-zeroclaw.md). Project plan:
 [`docs/sundai-zeroclaw-music-roadmap.md`](docs/sundai-zeroclaw-music-roadmap.md).
+
+## Quickstart (from a fresh clone · macOS / Apple Silicon)
+
+```bash
+git clone https://github.com/gitayam/riff-music-bot && cd riff-music-bot
+./scripts/setup.sh              # npm deps (both render engines), Playwright Chromium, ffmpeg check, creates .env
+# → edit .env: MISTRAL_API_KEY / OPENAI_API / DISCORD_BOT_TOKEN / DISCORD_GUILD_ID / MUSIC_API_TOKEN
+./scripts/install-services.sh   # generate + start the 3 launchd services (daemon + watcher + music-api)
+./scripts/strudel-doctor.sh     # verify everything (aim for all ✓)
+```
+
+You also need the **zeroclaw runtime** (the Rust binary) on your `PATH` — see
+[zeroclaw-labs/zeroclaw](https://github.com/zeroclaw-labs/zeroclaw).
 
 ## Capabilities & services
 

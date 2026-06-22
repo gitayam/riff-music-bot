@@ -1,5 +1,9 @@
 # Sundai Hack 128 — ZeroClaw Music Orchestrator — Roadmap
 
+> 📦 **Repo (commit here):** <https://github.com/gitayam/riff-music-bot> — the standalone
+> repo IS the source of truth now. Work in `zeroclaw/` and push to that remote; the copy
+> in the `llms-local` monorepo is a historical mirror.
+
 **Event:** Sundai Hack 128 · Coding Harnesses with ZeroClaw · Sun Jun 21, 10:00–22:00
 **Ship gate:** working web demo on the internet by **final presentation, 20:00**.
 **Ethos (Sundai):** *Build. Ship. Shortcuts.* Go for less, to do more. Get off localhost.
@@ -549,6 +553,7 @@ curl -H "Authorization: Bearer $ZEROCLAW_API_TOKEN" \
 ## Build log
 *Running record of what's shipped, newest first. Updated each work iteration.*
 
+- **Jun 21 — Fresh-clone setup + pointed all docs at the canonical repo.** Added `scripts/setup.sh` (idempotent: checks node/ffmpeg/python + zeroclaw, `npm install` both render engines, Playwright Chromium, creates `.env` from the template) — so a clone goes setup → edit `.env` → `install-services.sh` → `doctor`. README gained a **Quickstart** + a top "Repository — commit here" banner; this roadmap + the README + the `llms-local` mirror now all point to **https://github.com/gitayam/riff-music-bot** as the place to commit (the monorepo copy is a historical mirror).
 - **Jun 21 — Made the launchd services portable (clone-and-run).** The committed plists hardcoded one machine's absolute path, so a cloned repo couldn't start the services. Added `scripts/install-services.sh`, which **generates** the three plists rooted at wherever the repo lives (+ `$HOME`) and loads them — `./scripts/install-services.sh` (or `--uninstall`, or `--generate DIR` to just inspect). Verified: generated plists pass `plutil -lint`, paths are repo-relative, and the live services were untouched (used `--generate`, not a reload). README's launchd section rewritten to the one-command install (covers all three services). Now anyone can clone `riff-music-bot` and bring the stack up on their own machine.
 - **Jun 21 — Extracted as a standalone repo + published for the Sundai submission.** `zeroclaw/` is now its own git repo (kept in place so the live launchd services keep working), made self-contained (docs copied in, README links fixed), MIT-licensed. **Secret hygiene:** hard-scanned all tracked content before any commit/push — `.env` stays gitignored (confirmed not on the remote), and the frontend team's Supabase publishable key + project URL were redacted from this copied roadmap. Pushed **public** to **https://github.com/gitayam/riff-music-bot** (default branch `main`). 41 files, no keys committed.
 - **Jun 21 — README brought current with the shipped system.** It still said "wired to Mistral" and "① a one-click play link" — stale by ~10 features. Fixed the LLM line (gpt-5.4 + fallback) and the reply description (now auto-delivers a 🎙️ voice message), and added a **"Capabilities & services"** section: the end-to-end chat flow, the HTTP music API (`/generate`, `/render`), the **three launchd services** (table), and the local render pipeline + doctor. A teammate or judge reading `zeroclaw/README.md` now actually sees what was built. (README was clean/committed — no in-flight edits clobbered; the in-flight vocals feature on `strudel-watch.py` left untouched.)
