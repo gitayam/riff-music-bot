@@ -20,11 +20,11 @@ root="$(cd "$here/.." && pwd)"
 render="$root/render/strudel-render.mjs"   # Option A — engine of record
 src="${1:?usage: strudel-deliver.sh <codefile|-> [channel_id] [--send] [--cycles N]}"; shift || true
 
-channel=""; send=""; cycles=""   # empty → auto-sized from the code below (song = full length, loop = 4)
+channel=""; send=""; cycles=""; user_cycles=""   # cycles empty → auto-sized from the code (song = full, loop = 4)
 while [ $# -gt 0 ]; do
   case "$1" in
     --send) send=1 ;;
-    --cycles|--secs) shift; cycles="${1:?--cycles needs a number}" ;;   # --secs kept as alias
+    --cycles|--secs) shift; cycles="${1:?--cycles needs a number}"; user_cycles=1 ;;   # --secs kept as alias
     *) channel="$1" ;;
   esac; shift
 done
@@ -37,10 +37,27 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 echo "── 1/4 lint (advisory):"
 printf '%s' "$code" | "$here/strudel-lint.sh" || echo "   (lint flagged — the render gate is the real check)"
 
-echo "── 2a/4 parse-gate (fast pure-node check — aborts on invalid code):"
+echo "── 2a/4 parse-gate (fast pure-node check; self-heals on failure):"
 # Option A (Chromium) renders ~silence for invalid code instead of failing, so gate first
 # with the pure-node renderer, which exits non-zero on a non-pattern (e.g. [...]-wrapped).
-node "$here/render/render.mjs" "$code" "$tmp/gate.wav" 1 >/dev/null
+# On failure, self-heal: ask the agent to fix it once, re-gate, and deliver the repaired
+# version — a repaired voice message beats silently dropping the reply (same guarantee the
+# sync API gives /generate). STRUDEL_REPAIR_CMD overrides the repair command (used by tests).
+if ! node "$here/render/render.mjs" "$code" "$tmp/gate.wav" 1 >/dev/null 2>"$tmp/gate.err"; then
+  gerr="$(tail -1 "$tmp/gate.err" 2>/dev/null || true)"
+  echo "   gate REJECTED ($gerr) — attempting one auto-repair via the agent…"
+  repair_cmd="${STRUDEL_REPAIR_CMD:-$here/strudel-repair.sh}"
+  if repaired="$($repair_cmd "$code" "$gerr" 2>/dev/null)" \
+       && [ -n "${repaired//[[:space:]]/}" ] \
+       && node "$here/render/render.mjs" "$repaired" "$tmp/gate.wav" 1 >/dev/null 2>&1; then
+    echo "   ✓ auto-repair produced valid code — delivering the repaired version"
+    code="$repaired"
+    [ -n "$user_cycles" ] || cycles="$(printf '%s' "$code" | "$here/strudel-cycles.sh" -)"
+  else
+    echo "   ✗ auto-repair failed — not delivering invalid code" >&2
+    exit 1
+  fi
+fi
 
 echo "── 2b/4 render → WAV (faithful strudel.cc engine via headless Chromium):"
 render_once() { printf '%s' "$code" | timeout 150 node "$render" "$tmp/tune.wav" "$cycles"; }
