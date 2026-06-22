@@ -45,6 +45,8 @@ git clone https://github.com/gitayam/riff-music-bot && cd riff-music-bot
 You also need the **zeroclaw runtime** (the Rust binary) on your `PATH` — see
 [zeroclaw-labs/zeroclaw](https://github.com/zeroclaw-labs/zeroclaw).
 
+> 🎤 **Presenting / demoing it?** Follow the [**demo runbook**](docs/DEMO.md) — live script, backup plan, and what to emphasize.
+
 ## Capabilities & services
 
 **End-to-end music in chat:** `@mention` (or DM) the bot → it replies with the Strudel
