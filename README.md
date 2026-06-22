@@ -9,6 +9,24 @@ and **SimpleX** (via a local bridge, since zeroclaw has no native SimpleX channe
 > This is the canonical repo. It was extracted from a monorepo; any copy living under
 > `llms-local/` is a historical mirror — **do not commit there.**
 
+## 🎧 Try it live (Discord)
+
+**Add the bot — `zeromusicbot#0169`** — to a server you can post in, then `@mention` it:
+
+**➕ [Add zeromusicbot to your server](https://discord.com/oauth2/authorize?client_id=1518359851024126132&scope=bot&permissions=101376)**
+
+```text
+@zeromusicbot make a chill lofi loop
+```
+
+It replies with the Strudel code + a strudel.cc play link, and a few seconds later posts a
+🎙️ **voice message** of the track. Try follow-ups — *"darker, add a bassline"*,
+*"give me 3 variations"* — or **`@zeromusicbot help`** for the menu.
+
+> ⏳ **Temporary demo:** the bot runs on a laptop for the Sundai hackathon — it may be
+> **offline** at times and is **not** a 24/7 service. If it doesn't answer, it's simply not
+> running right now (the code here is fully self-hostable — see Quickstart).
+
 ## What the bot does — "Riff", the music director
 
 The `hermes` agent runs a music-director persona — **Riff**, defined in
@@ -100,7 +118,7 @@ field is schema-required; the real token is overlaid at runtime.
 ## Usage
 
 ```bash
-./run.sh agent -a hermes -m "your question"   # one-off Mistral chat
+./run.sh agent -a hermes -m "your question"   # one-off chat (gpt-5.4)
 ./run.sh agent -a hermes                       # interactive chat
 ./run.sh channel doctor                        # health-check Discord
 ./run.sh daemon                                # always-on: listen + respond on Discord
@@ -109,7 +127,7 @@ field is schema-required; the real token is overlaid at runtime.
 
 ## Verified
 
-- Mistral LLM round-trip: `./run.sh agent -a hermes -m "..."` → reply ✓
+- LLM round-trip (gpt-5.4): `./run.sh agent -a hermes -m "..."` → reply ✓
 - Discord token auth: `./run.sh channel doctor` → "Discord healthy" ✓
 
 ## Discord — remaining setup
