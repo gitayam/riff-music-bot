@@ -120,24 +120,32 @@ def save_state(s):
     with open(STATE, "w") as f: json.dump(s, f)
 
 def channels():
-    env = os.environ.get("STRUDEL_WATCH_CHANNELS", "").strip()
-    g = os.environ.get("DISCORD_GUILD_ID", "").strip()
-    if env:
-        base = [c.strip() for c in env.split(",") if c.strip()]
-    elif g:
-        base = [c["id"] for c in api(f"/guilds/{g}/channels") if c.get("type") in (0, 5)]  # text + announcement
-    else:
-        sys.exit("set STRUDEL_WATCH_CHANNELS or DISCORD_GUILD_ID")
-    # also watch ACTIVE threads in the guild — a reply posted in a thread otherwise never becomes a
-    # voice message (the watcher only saw top-level channels). Non-fatal if the endpoint fails.
-    if g:
-        try:
-            base += [t["id"] for t in (api(f"/guilds/{g}/threads/active") or {}).get("threads", [])]
-        except Exception:
-            pass
+    # Watch every text/announcement channel + active thread in EVERY guild the bot is in, so a reply is
+    # delivered wherever the bot is @mentioned — not just a hand-picked subset (the bug: the bot lived in
+    # 27 channels but only 3 were watched, so replies elsewhere never became voice messages).
+    # STRUDEL_WATCH_CHANNELS adds extra ids on top. Inaccessible channels just 403-and-skip per cycle.
+    explicit = [c.strip() for c in os.environ.get("STRUDEL_WATCH_CHANNELS", "").split(",") if c.strip()]
+    discovered = []
+    try:
+        for guild in api("/users/@me/guilds"):
+            gid = guild["id"]
+            try:
+                discovered += [c["id"] for c in api(f"/guilds/{gid}/channels") if c.get("type") in (0, 5)]
+                discovered += [t["id"] for t in (api(f"/guilds/{gid}/threads/active") or {}).get("threads", [])]
+            except Exception:
+                continue
+    except Exception:
+        pass
+    base = explicit + discovered
+    if not base:                                          # discovery failed + no explicit list → fall back
+        g = os.environ.get("DISCORD_GUILD_ID", "").strip()
+        if g: base = [c["id"] for c in api(f"/guilds/{g}/channels") if c.get("type") in (0, 5)]
+        else: sys.exit("bot is in no guild and STRUDEL_WATCH_CHANNELS/DISCORD_GUILD_ID are unset")
     seen, out = set(), []
     for c in base:
         if c not in seen: seen.add(c); out.append(c)
+    if len(out) > 60:
+        print(f"  note: watching {len(out)} channels — set STRUDEL_WATCH_CHANNELS to restrict if rate-limited")
     return out
 
 def cycle(send):
@@ -152,18 +160,11 @@ def cycle(send):
         except urllib.error.HTTPError as e:
             print(f"  ch {ch}: skip ({e.code})"); continue
         msgs = sorted(msgs, key=lambda m: int(m["id"]))            # oldest -> newest
-        if last is None:                                            # first sight: don't replay the backlog,
-            # but DO deliver the most-recent stranded reply (so a fresh thread/channel for one request
-            # works) — arm just before it so the normal loop delivers it next cycle (idempotent, capped at 1).
-            if msgs:
-                arm = msgs[-1]["id"]
-                for i in range(len(msgs) - 1, -1, -1):
-                    mi = msgs[i]
-                    if (mi["author"]["id"] == bot_id and not (int(mi.get("flags", 0)) & 8192)
-                            and CODE_RE.search(mi.get("content", "")) and not already_delivered(msgs, i, bot_id)):
-                        if i > 0: arm = msgs[i - 1]["id"]
-                        break
-                state[ch] = arm
+        if last is None:                                            # first sight: arm to latest, DON'T replay.
+            # We now watch ~every channel the bot is in, so replaying backlog would bulk-deliver old
+            # stranded replies across dozens of channels (a spam burst). New replies after arming deliver
+            # normally; the idempotency check below still makes any deliberate re-scan safe.
+            if msgs: state[ch] = msgs[-1]["id"]
             continue
         for idx_m, m in enumerate(msgs):
             state[ch] = m["id"]
