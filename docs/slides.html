@@ -109,6 +109,19 @@
     color:var(--faint);user-select:none}
   .hint kbd{color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
   :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+  /* print / PDF fallback — one slide per page, dark background preserved */
+  @media print{
+    @page{size:13.333in 7.5in;margin:0}
+    html,body{background:var(--ground)!important}
+    *{ -webkit-print-color-adjust:exact!important;print-color-adjust:exact!important }
+    .deck{height:auto!important;overflow:visible!important;display:block!important;scroll-snap-type:none!important}
+    .slide{height:7.5in!important;min-height:0!important;break-after:page;break-inside:avoid;
+      border:none!important;justify-content:center;padding:0.7in 0.9in}
+    .slide:last-child{break-after:auto}
+    .progress,.hint{display:none!important}
+    .brand .cursor{animation:none}
+  }
 </style>
 
 <div class="deck" id="deck" tabindex="0">
