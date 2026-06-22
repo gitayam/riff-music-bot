@@ -90,6 +90,28 @@ Expose with `cloudflared tunnel --url http://localhost:8799`. See [`scripts/api-
 faithful headless render (`render/strudel-render.mjs`, real strudel.cc samples) → Opus/OGG
 → voice message. `scripts/strudel-doctor.sh` is a one-command pre-demo health check.
 
+## Reliability (built to survive a live demo)
+
+Hardened so the demo works even on flaky conference wifi:
+
+- **Fully-offline rendering.** The `@strudel/web` bundle and the common sample packs (909/808
+  drum machines, piano, and core dirt-samples drums) are cached locally — a network blip can't
+  blank a render. `(cd render && node cache-samples.mjs)` populates the cache (setup.sh does it);
+  proven by rendering with every CDN blocked.
+- **Self-healing generation, both surfaces.** If the model emits Strudel that doesn't parse, it's
+  auto-repaired — the agent is re-prompted with the exact parse error and retried — on the **HTTP
+  API** (`/generate`) *and* the **Discord** path (`strudel-deliver.sh`). Invalid code is never
+  delivered; the parse-gate is the wall.
+- **Guarded examples & song length.** The soul's own template examples are checked against the
+  parse-gate (so the model never learns an invalid pattern), and `arrange()` songs are sized to
+  the sum of their section bars (so a song never renders truncated or over-long).
+
+**Verify it:**
+- `./scripts/test.sh` — the regression suite (cycle sizing · soul examples · auto-repair ×2),
+  deterministic, no keys needed (~30s).
+- `./scripts/strudel-doctor.sh` — one-command live demo-readiness check (deps, render engines,
+  offline render, services, auth, full-chain smoke).
+
 ## From a loop to a song (the musical model)
 
 Riff builds music the way a producer does — **in layers and sections, not one giant blob:**
@@ -201,7 +223,7 @@ The three services run as user LaunchAgents that start at login and restart on c
 
 ```bash
 ./scripts/install-services.sh        # generates plists rooted at THIS repo path + loads them
-./scripts/strudel-doctor.sh          # verify all three are up (16/16)
+./scripts/strudel-doctor.sh          # verify all three are up + demo-readiness (22/22)
 ./scripts/install-services.sh --uninstall   # stop + remove
 ```
 
