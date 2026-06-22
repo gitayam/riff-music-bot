@@ -21,9 +21,11 @@ API = "https://discord.com/api/v10"
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, os.pardir, "data", "strudel-watch-state.json")
 CODE_RE = re.compile(r"```(?:javascript|js)?\s*\n(.*?)```", re.S)
-# Optional spoken-vocal directive Riff may add: "🎤 say: <words>" (one line). When present,
-# we render the beat AND speak the line over it via render/voice-deliver.sh; else instrumental.
-VOICE_RE = re.compile(r"(?:🎤|🎙️?)\s*say\s*:\s*(.+)", re.I)
+# Optional spoken-vocal directive Riff may add: "🎤 say: <words>" or "🎤 say [voice]: <words>"
+# (one line). When present, we render the beat AND speak the line over it via voice-deliver.sh
+# with the chosen voice; else instrumental. Backward-compatible: the [voice] group is optional.
+VOICE_RE = re.compile(r"(?:🎤|🎙️?)\s*say\s*(?:\[\s*([a-z]+)\s*\])?\s*:\s*(.+)", re.I)
+VOICES = {"alloy","ash","ballad","coral","echo","fable","nova","onyx","sage","shimmer","verse","marin","cedar"}
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or sys.exit("DISCORD_BOT_TOKEN not set (source .env)")
 
 def api(path, method="GET", body=None):
@@ -77,17 +79,19 @@ def cycle(send):
             if not mm: continue
             code = mm.group(1).strip()
             vm = VOICE_RE.search(m.get("content", ""))
-            say = vm.group(1).strip().strip('"“”\'') if vm else None
-            kind = f'voice+"{say[:40]}"' if say else "instrumental"
+            say = vm.group(2).strip().strip('"“”\'') if vm else None
+            voice = (vm.group(1) or "").lower() if vm else ""
+            voice = voice if voice in VOICES else "ash"        # validate; default warm 'ash'
+            kind = f'voice[{voice}]+"{say[:32]}"' if say else "instrumental"
             print(f"  ch {ch} msg {m['id']}: Strudel block ({len(code)} chars, {kind}) -> "
                   + ("delivering" if send else "WOULD deliver"))
             if send:
                 with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
                     tf.write(code); path = tf.name
                 try:
-                    if say:   # render beat + speak the line over it
+                    if say:   # render beat + speak the line over it (chosen voice)
                         cmd = [os.path.join(HERE, os.pardir, "render", "voice-deliver.sh"),
-                               "--code", path, "--say", say, "--channel", ch, "--send"]
+                               "--code", path, "--say", say, "--voice", voice, "--channel", ch, "--send"]
                     else:     # instrumental (unchanged path)
                         cmd = [os.path.join(HERE, "strudel-deliver.sh"), path, ch, "--send"]
                     subprocess.run(cmd, check=True)
