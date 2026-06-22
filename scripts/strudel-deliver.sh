@@ -20,7 +20,7 @@ root="$(cd "$here/.." && pwd)"
 render="$root/render/strudel-render.mjs"   # Option A — engine of record
 src="${1:?usage: strudel-deliver.sh <codefile|-> [channel_id] [--send] [--cycles N]}"; shift || true
 
-channel=""; send=""; cycles=4
+channel=""; send=""; cycles=""   # empty → auto-sized from the code below (song = full length, loop = 4)
 while [ $# -gt 0 ]; do
   case "$1" in
     --send) send=1 ;;
@@ -30,6 +30,8 @@ while [ $# -gt 0 ]; do
 done
 
 code="$(if [ "$src" = "-" ]; then cat; else cat "$src"; fi)"
+# Auto-size the render: an arrange(...) song renders for the SUM of its section bars; a loop = 4.
+[ -n "$cycles" ] || cycles="$(printf '%s' "$code" | "$here/strudel-cycles.sh" -)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 echo "── 1/4 lint (advisory):"

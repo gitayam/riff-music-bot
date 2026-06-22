@@ -33,3 +33,8 @@ simplex/sessions/
 simplex/*.log
 simplex/files/
 simplex/group-link.txt
+
+# watchdog runtime state
+watchdog.log
+watchdog.err
+.watchdog-fails

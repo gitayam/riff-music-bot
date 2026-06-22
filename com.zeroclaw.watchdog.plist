@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Self-heal timer for the zeroclaw bot. Runs scripts/watchdog.sh every 120s; the script
+  restarts com.zeroclaw.hermes if the daemon is down OR the Discord gateway has gone
+  zombie (status!=ok / stale heartbeat) — the failure KeepAlive can't catch.
+  Install:  cp com.zeroclaw.watchdog.plist ~/Library/LaunchAgents/ &&
+            launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.zeroclaw.watchdog.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zeroclaw.watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/sac/Git/llms-local/zeroclaw/scripts/watchdog.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>120</integer>
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/sac</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>STALE_MAX</key>
+        <string>240</string>
+    </dict>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/sac/Git/llms-local/zeroclaw/watchdog.err</string>
+</dict>
+</plist>

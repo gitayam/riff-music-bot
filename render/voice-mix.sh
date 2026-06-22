@@ -35,8 +35,11 @@ die() { echo "✗ mix: $*" >&2; exit 1; }
 
 dur() { ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$1"; }
 vdur="$(dur "$voice")"
-# target length = intro delay + spoken line + tail, computed with awk (floats).
-target="$(awk -v d="$delay" -v v="$vdur" -v t="$tail" 'BEGIN{printf "%.3f", d+v+t}')"
+mdur="$(dur "$music")"
+# Output length = the WHOLE song when the music is longer than the voice window — so a full
+# arranged song is NOT truncated down to the hook. Otherwise (a short loop) use the voice
+# window (intro delay + spoken line + tail). max(music, delay+voice+tail).
+target="$(awk -v d="$delay" -v v="$vdur" -v t="$tail" -v m="$mdur" 'BEGIN{w=d+v+t; printf "%.3f", (m>w?m:w)}')"
 delms="$(awk -v d="$delay" 'BEGIN{printf "%d", d*1000}')"
 
 # -stream_loop -1 loops the instrumental input so atrim always has enough to cover `target`.

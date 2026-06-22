@@ -18,7 +18,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"     # render/
 zc="$(cd "$here/.." && pwd)"                              # zeroclaw/
 
-codesrc="" say="" message="" auto="" vibe="" voice="ash" cycles=4
+codesrc="" say="" message="" auto="" vibe="" voice="ash" cycles=""   # empty → auto-sized from code (song = full length, loop = 4)
 style="Speak clearly and musically, like a vocal hook over a beat."
 channel="" send="" keep="" out=""
 while [ $# -gt 0 ]; do
@@ -75,6 +75,9 @@ fi
 # ── Work area ─────────────────────────────────────────────────────────────────
 if [ -n "$keep" ]; then mkdir -p "$keep"; tmp="$keep"; else tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT; fi
 code="$(if [ "$codesrc" = "-" ]; then cat; else cat "$codesrc"; fi)"
+# Auto-size the render: an arrange(...) song renders for the SUM of its section bars (else it gets
+# cut to the intro); a plain loop = 4. Explicit --cycles still wins.
+[ -n "$cycles" ] || cycles="$(printf '%s' "$code" | "$zc/scripts/strudel-cycles.sh" -)"
 
 echo "── 1/6 lint (advisory)"
 printf '%s' "$code" | "$zc/scripts/strudel-lint.sh" || echo "   (lint flagged — render is the real gate)"
