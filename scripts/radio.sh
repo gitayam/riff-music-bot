@@ -78,7 +78,13 @@ while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
        || printf '%s' "$code" | timeout 150 node "$render" "$work/seg.wav" "$cyc" >/dev/null 2>&1; }; then
     echo "[radio] render failed for seg $i — skipping" >&2; i=$((i+1)); continue; fi
   seg="$(printf 'seg%05d.ts' "$i")"
-  if ! ffmpeg -hide_banner -v error -y -i "$work/seg.wav" -af "alimiter=limit=0.95" \
+  # short declick fades at the segment boundaries so the join between differently-keyed/tempo'd
+  # segments doesn't click (live HLS can't true-crossfade independent segments; this is the clean
+  # alternative — ~0.08s in/out is imperceptible but removes the boundary pop). + true-peak limiter.
+  swav="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$work/seg.wav" 2>/dev/null || echo 0)"
+  fo="$(awk "BEGIN{d=$swav+0; printf \"%.2f\", (d>0.4 ? d-0.08 : 0)}")"
+  if ! ffmpeg -hide_banner -v error -y -i "$work/seg.wav" \
+       -af "afade=t=in:d=0.08,afade=t=out:st=${fo}:d=0.08,alimiter=limit=0.95" \
        -c:a aac -b:a 128k -ar 44100 -f mpegts "$outdir/$seg" 2>/dev/null; then
     echo "[radio] transcode failed for seg $i — skipping" >&2; i=$((i+1)); continue; fi
   dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$outdir/$seg" 2>/dev/null || echo 15.0)"
