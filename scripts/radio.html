@@ -17,7 +17,12 @@
     padding:.75rem 1.4rem;background:linear-gradient(135deg,var(--amber),var(--mag));
     color:#15131f;font-weight:700}
   audio{width:100%;margin-top:1.1rem}
-  .note{margin-top:1.3rem;font-size:.74rem;color:#8a7fa6}
+  .steer{margin-top:1.3rem;display:flex;flex-wrap:wrap;gap:.4rem}
+  .steer button{margin:0;padding:.4rem .7rem;font-size:.78rem;font-weight:600;border-radius:8px;
+    background:#2a2238;color:var(--fg);border:1px solid #3a3150}
+  .steer button.on{background:linear-gradient(135deg,var(--amber),var(--mag));color:#15131f;border-color:transparent}
+  #status{margin-top:.6rem;font-size:.76rem;color:var(--amber);min-height:1.1em}
+  .note{margin-top:1.1rem;font-size:.74rem;color:#8a7fa6}
   code{color:var(--amber)}
 </style></head>
 <body>
@@ -28,13 +33,32 @@
       Strudel pattern, rendered locally and streamed over HLS.</div>
     <button id="play">▶ Play the stream</button>
     <audio id="a" controls preload="none" src="stream.m3u8"></audio>
+    <div class="steer">
+      <button data-s="darker">darker</button><button data-s="brighter">brighter</button>
+      <button data-s="faster">faster</button><button data-s="slower">slower</button>
+      <button data-s="dense">denser</button><button data-s="sparse">sparser</button>
+      <button data-s="" id="clear">clear</button>
+    </div>
+    <div id="status">steer the stream — your nudge applies from the next segment</div>
     <div class="note">Native HLS plays in <b>Safari</b>. In Chrome/Firefox, point a player at the
       stream URL: <code>ffplay stream.m3u8</code> or open it in VLC. The live playlist keeps growing
       as new segments are composed.</div>
   </div>
   <script>
-    const a = document.getElementById('a'), b = document.getElementById('play');
+    const a = document.getElementById('a'), b = document.getElementById('play'), status = document.getElementById('status');
     b.addEventListener('click', () => { a.play().then(() => { b.textContent = '♪ playing…'; }).catch(() => {
       b.textContent = 'open stream.m3u8 in ffplay/VLC'; }); });
+    // steer controls: toggle a set of hints, POST the combined string to /steer (radio.sh reads it)
+    const active = new Set();
+    for (const btn of document.querySelectorAll('.steer button')) {
+      btn.addEventListener('click', () => {
+        const s = btn.dataset.s;
+        if (s === '') { active.clear(); document.querySelectorAll('.steer button').forEach(x => x.classList.remove('on')); }
+        else { active.has(s) ? active.delete(s) : active.add(s); btn.classList.toggle('on', active.has(s)); }
+        const hint = [...active].join(' ');
+        fetch('steer', { method: 'POST', body: hint }).catch(() => {});
+        status.textContent = hint ? 'steering: ' + hint + ' (from next segment)' : 'steering: off';
+      });
+    }
   </script>
 </body></html>

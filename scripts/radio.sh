@@ -60,8 +60,9 @@ echo "[radio] writing HLS to $m3u8 (cycles/seg=$cyc, max=$max [0=forever], windo
 # Optional: serve the stream + a browser player so the radio is one-command demoable.
 if [ -n "$serve" ]; then
   cp "$here/radio.html" "$outdir/radio.html" 2>/dev/null || true
-  ( cd "$outdir" && exec python3 -m http.server "$port" >/dev/null 2>&1 ) & srv_pid=$!
-  echo "[radio] ▶ player: http://localhost:$port/radio.html   ·   stream: http://localhost:$port/stream.m3u8" >&2
+  # radio-serve.py = static files + a POST /steer endpoint (writes <outdir>/steer), so the player steers
+  python3 "$here/radio-serve.py" "$outdir" --port "$port" >/dev/null 2>&1 & srv_pid=$!
+  echo "[radio] ▶ player (steerable): http://localhost:$port/radio.html   ·   stream: http://localhost:$port/stream.m3u8" >&2
 fi
 
 i=0
