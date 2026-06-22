@@ -23,7 +23,7 @@ rm -f /tmp/worker-unit.$$
 echo "== integration (wrangler dev + mock OpenAI) =="
 command -v wrangler >/dev/null 2>&1 || npx wrangler --version >/dev/null 2>&1 || { echo "  SKIP — wrangler not installed"; echo; echo "PASS (unit only)"; exit 0; }
 
-PORT=8788; MOCKPORT=8790; TOK="testtoken-$$"
+PORT=8788; MOCKPORT=8790; DPORT=8791; TOK="testtoken-$$"
 mock=/tmp/worker-mock.$$.py
 cat > "$mock" <<'PY'
 import sys, json
@@ -43,6 +43,26 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
 python3 "$mock" "$MOCKPORT" & MOCK_PID=$!
 
+# Mock Discord API: records each interaction follow-up (PATCH @original) so we can assert what Riff posted.
+dmock=/tmp/worker-dmock.$$.py; DLOG=/tmp/worker-dlog.$$
+cat > "$dmock" <<'PY'
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+LOG=sys.argv[2]
+class H(BaseHTTPRequestHandler):
+    def log_message(self,*a): pass
+    def do_PATCH(self):
+        n=int(self.headers.get("Content-Length","0")); b=self.rfile.read(n)
+        open(LOG,"ab").write(b+b"\n")
+        self.send_response(200); self.send_header("Content-Length","2"); self.end_headers(); self.wfile.write(b"{}")
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+python3 "$dmock" "$DPORT" "$DLOG" & DMOCK_PID=$!
+
+# Ed25519 keypair for the Discord signature test — public key (hex) goes to the Worker via --var.
+KEYFILE=/tmp/worker-dkey.$$.json
+DPUB=$(node test/dev-sign.mjs genkey "$KEYFILE")
+
 # Boot wrangler dev locally; inject token + a mock OpenAI base via --var (overrides wrangler.toml).
 # --persist-to a FRESH temp dir so Durable Object state starts empty every run (the default
 # .wrangler/state persists across runs → version numbers would accumulate and the asserts would drift).
@@ -50,9 +70,11 @@ STATE="/tmp/worker-state.$$"
 wrangler dev --port "$PORT" --inspector-port 0 --ip 127.0.0.1 --persist-to "$STATE" --test-scheduled \
   --var "MUSIC_API_TOKEN:$TOK" --var "OPENAI_API_KEY:mock-key" \
   --var "OPENAI_BASE_URL:http://127.0.0.1:$MOCKPORT" \
+  --var "DISCORD_PUBLIC_KEY:$DPUB" --var "DISCORD_API_BASE:http://127.0.0.1:$DPORT" \
   >/tmp/worker-dev.$$ 2>&1 </dev/null & DEV_PID=$!
 
-cleanup(){ kill "$DEV_PID" "$MOCK_PID" 2>/dev/null; wait "$DEV_PID" 2>/dev/null; rm -rf "$mock" /tmp/worker-dev.$$ "$STATE"; }
+cleanup(){ kill "$DEV_PID" "$MOCK_PID" "$DMOCK_PID" 2>/dev/null; wait "$DEV_PID" 2>/dev/null;
+           rm -rf "$mock" "$dmock" "$DLOG" "$KEYFILE" /tmp/worker-dev.$$ "$STATE"; }
 trap cleanup EXIT
 
 base="http://127.0.0.1:$PORT"
@@ -159,6 +181,36 @@ else
   [ "$sc" = 200 ] && ok "retention: scheduled() fires without error ($sc)" || bad "retention: scheduled fire ($sc)"
 fi
 rm -f /tmp/worker-resp.$$ "$oldsql" /tmp/worker-d1.$$
+
+# Discord Interactions webhook (Ed25519-signed). Sign (timestamp + body) with the test private key.
+TS=1700000000
+dsend(){ # $1=body  -> sets $CODE $RESP, headers signed with the matching key
+  local body=$1 sig; sig=$(printf '%s' "$body" | node test/dev-sign.mjs sign "$KEYFILE" "$TS")
+  RESP=$(curl -s -w $'\n%{http_code}' -X POST "$base/discord/interactions" \
+    -H "X-Signature-Ed25519: $sig" -H "X-Signature-Timestamp: $TS" -H "Content-Type: application/json" \
+    --data "$body"); CODE=${RESP##*$'\n'}; RESP=${RESP%$'\n'*}; }
+
+dsend '{"type":1}'
+{ [ "$CODE" = 200 ] && printf '%s' "$RESP" | grep -qF '"type":1'; } && ok "Discord PING (valid sig) → PONG" || bad "discord PING (code=$CODE)"
+
+# bad signature: sign a DIFFERENT body than we send → verify must fail
+badsig=$(printf '%s' '{"type":1,"x":1}' | node test/dev-sign.mjs sign "$KEYFILE" "$TS")
+bc=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/discord/interactions" \
+  -H "X-Signature-Ed25519: $badsig" -H "X-Signature-Timestamp: $TS" --data '{"type":1}')
+[ "$bc" = 401 ] && ok "Discord bad signature → 401" || bad "discord bad-sig ($bc)"
+
+nc=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/discord/interactions" --data '{"type":1}')
+[ "$nc" = 401 ] && ok "Discord missing signature headers → 401" || bad "discord no-sig ($nc)"
+
+: > "$DLOG"
+dsend '{"type":2,"application_id":"app1","token":"tok1","channel_id":"c9","data":{"name":"riff","options":[{"name":"prompt","value":"funky disco loop"}]}}'
+{ [ "$CODE" = 200 ] && printf '%s' "$RESP" | grep -qF '"type":5'; } && ok "Discord slash command → deferred ack (type 5)" || bad "discord command ack (code=$CODE)"
+
+# the deferred follow-up runs async (waitUntil): poll the mock Discord for the PATCH with the play link
+EXPECT_LINK="https://strudel.cc/#c2V0Y3BtKDEyMC80KQpzdGFjayhzb3VuZCgiYmQqNCIpKQ=="
+got=""; for _ in $(seq 1 20); do grep -qF "$EXPECT_LINK" "$DLOG" 2>/dev/null && { got=1; break; }; sleep 0.5; done
+[ -n "$got" ] && ok "Discord follow-up posts code + ▶ play link (waitUntil)" || bad "discord followup not received"
+rm -f /tmp/worker-resp.$$
 
 echo
 if [ "$fails" -eq 0 ]; then echo "PASS"; else echo "$fails FAILED"; fi

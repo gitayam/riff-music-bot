@@ -12,6 +12,7 @@ compatibility_date = "2026-06-01"
 OPENAI_MODEL = "gpt-5.4"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 RETENTION_DAYS = "30"   # tracks older than this are pruned by the daily cron (D1 10 GB cap)
+DISCORD_API_BASE = "https://discord.com/api/v10"   # interaction follow-ups (PATCH @original)
 
 [observability]
 enabled = true
@@ -43,7 +44,9 @@ new_sqlite_classes = ["Session"]
 # Secrets (NOT stored here — set per-environment):
 #   npx wrangler secret put OPENAI_API_KEY     # the gpt-5.4 key (local .env OPENAI_API)
 #   npx wrangler secret put MUSIC_API_TOKEN    # the shared bearer other groups send
-# For `wrangler dev`, put the same two in worker/.dev.vars (gitignored). See .dev.vars.example.
+#   npx wrangler secret put DISCORD_PUBLIC_KEY # the app's Ed25519 public key (Discord Dev Portal)
+# For `wrangler dev`, put these in worker/.dev.vars (gitignored). See .dev.vars.example.
+# After deploy, set the Discord "Interactions Endpoint URL" to https://<worker>/discord/interactions.
 
 # A stable custom-domain route retires the ephemeral quick tunnel (uncomment + set your zone):
 # routes = [{ pattern = "music.example.com", custom_domain = true }]

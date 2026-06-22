@@ -2,6 +2,7 @@
 # In prod these two are set via `npx wrangler secret put <NAME>` instead.
 OPENAI_API_KEY=sk-...          # the gpt-5.4 key (locally: zeroclaw/.env OPENAI_API)
 MUSIC_API_TOKEN=choose-a-long-random-string   # the bearer other groups must send on every POST
+DISCORD_PUBLIC_KEY=            # the app's Ed25519 public key (Discord Dev Portal → General Information)
 # Optional overrides (also settable in wrangler.toml [vars]):
 # OPENAI_MODEL=gpt-5.4
 # OPENAI_BASE_URL=https://api.openai.com/v1

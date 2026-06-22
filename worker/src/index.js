@@ -21,6 +21,9 @@ import {
 } from "./lib.js";
 import { Session } from "./session.js";
 import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec } from "./store.js";
+import {
+  T, verifyInteractionSignature, commandPrompt, interactionSessionId, followupUrl, followupContent,
+} from "./discord.js";
 
 export { Session }; // the runtime needs the DO class exported from the entry module
 
@@ -205,8 +208,58 @@ async function handlePost(request, env, path) {
   }
 }
 
+// Discord Interactions webhook (Phase 3 P3). Auth here is the Ed25519 SIGNATURE, not the bearer token
+// (Discord can't send our token). Verify, PONG a PING, deferred-ack a command, compose in the background.
+async function handleDiscordInteraction(request, env, ctx) {
+  const sig = request.headers.get("X-Signature-Ed25519");
+  const ts = request.headers.get("X-Signature-Timestamp");
+  const raw = await request.text(); // RAW body — signature is over (timestamp + raw)
+  if (!env.DISCORD_PUBLIC_KEY) return new Response("discord not configured", { status: 503 });
+  if (!(await verifyInteractionSignature(env.DISCORD_PUBLIC_KEY, sig, ts, raw))) {
+    return new Response("invalid request signature", { status: 401 });
+  }
+  let interaction;
+  try { interaction = JSON.parse(raw); } catch { return new Response("bad json", { status: 400 }); }
+
+  if (interaction.type === T.PING) return json(200, { type: T.PONG });
+  if (interaction.type === T.APPLICATION_COMMAND) {
+    // Ack within 3s; the compose + message edit happen after we respond.
+    ctx.waitUntil(composeAndFollowup(env, interaction));
+    return json(200, { type: T.DEFERRED_CHANNEL_MESSAGE });
+  }
+  return json(200, { type: T.PONG }); // unknown type → harmless ack
+}
+
+// Runs after the deferred ack: compose Strudel, persist, and edit the @original message.
+async function composeAndFollowup(env, interaction) {
+  const url = followupUrl(env.DISCORD_API_BASE, interaction.application_id, interaction.token);
+  const prompt = commandPrompt(interaction);
+  let content;
+  try {
+    if (!prompt) {
+      content = "Give me something to make — e.g. `/riff prompt: funky disco loop, 120bpm`.";
+    } else {
+      const code = await composeValid(env, prompt, 2);
+      const share = shareUrl(code);
+      // Best-effort history (source 'discord'); never block the reply on persistence.
+      await insertTrack(env, buildTrackRow({
+        session_id: interactionSessionId(interaction), prompt, source: "discord",
+        strudel_code: code, share_url: share, version: 1,
+      }, newId()));
+      content = followupContent(prompt, code, share);
+    }
+  } catch (e) {
+    content = `Couldn't compose that: ${String(e.message || e).slice(0, 150)}`;
+  }
+  try {
+    await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) });
+  } catch (e) {
+    console.log("discord followup failed:", e.message);
+  }
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const { pathname } = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
@@ -237,6 +290,7 @@ export default {
             "POST /modify": "{session_id, instruction, repair_attempts?=2} → {strudel_code, share_url, diff, version, parent_id} (edits the session's latest version — 'faster' / 'darker' / 'add a bassline' — and returns the code diff)",
             "POST /render": "{code, session_id?} → same shape (validates + links Strudel you already have)",
             "GET /history": "?session_id=…&limit=…(≤100, default 20) → {tracks:[…]} (cross-session history from D1, newest first)",
+            "POST /discord/interactions": "Discord Interactions webhook (Ed25519-signed, not bearer): PING→PONG, slash command→deferred ack then a follow-up with code + ▶ link",
             "GET /health": "{ok:true}",
           },
           note: "Tier-A: code + a one-click strudel.cc play link, a per-session modify chain (Durable Object), and cross-session history (D1, daily-pruned). Audio render (audio_url) arrives in Phase 3 P1 (Container).",
@@ -245,7 +299,10 @@ export default {
       return json(404, { error: "not found" });
     }
 
-    if (request.method === "POST") return handlePost(request, env, pathname);
+    if (request.method === "POST") {
+      if (pathname === "/discord/interactions") return handleDiscordInteraction(request, env, ctx);
+      return handlePost(request, env, pathname);
+    }
     return json(405, { error: "method not allowed" });
   },
 

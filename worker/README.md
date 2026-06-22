@@ -20,10 +20,19 @@ the hard part (headless-Chromium render in a Container).
 | `POST /modify` | `{session_id, instruction, repair_attempts?=2}` | `{strudel_code, share_url, diff, version, parent_id, …}` — edits the session's latest version |
 | `POST /render` | `{code, session_id?}` | same shape (validates + links code you already have; never rewrites it) |
 | `GET /history` | `?session_id=…&limit=…` | `{tracks:[…]}` — cross-session history from D1, newest first (bearer-gated) |
+| `POST /discord/interactions` | Discord Interaction (Ed25519-signed) | PING→PONG; slash command→deferred ack, then a follow-up with code + ▶ link |
 
-`POST` and `GET /history` require `Authorization: Bearer <MUSIC_API_TOKEN>` (same contract as
-`api-server.py`). Errors: `400` bad/missing field · `401` unauthorized · `404` unknown session (modify) ·
-`422` invalid Strudel · `502` LLM upstream/config · `503` history without a D1 binding · `504` LLM timeout.
+`POST` (except `/discord/interactions`) and `GET /history` require `Authorization: Bearer <MUSIC_API_TOKEN>`
+(same contract as `api-server.py`). Errors: `400` bad/missing field · `401` unauthorized / bad signature ·
+`404` unknown session (modify) · `422` invalid Strudel · `502` LLM upstream/config · `503` history/discord
+not configured · `504` LLM timeout.
+
+**Discord-native (P3):** `POST /discord/interactions` is the event-driven replacement for the laptop's
+REST-poll `strudel-watch.py` watcher. Discord signs each request (Ed25519); the Worker verifies it with the
+app's public key (`DISCORD_PUBLIC_KEY`), answers the PING handshake, and for a slash command **acks within
+3 s with a deferred response** then composes the Strudel in `waitUntil()` and **edits the original message**
+(via the interaction token — no bot token needed) with the code + `strudel.cc` link. After deploy, set the
+app's *Interactions Endpoint URL* to `https://<worker>/discord/interactions`.
 
 **History + retention (D1):** every generate/modify/render is logged as a `tracks` row (Contract 5),
 queryable via `GET /history` (optionally scoped to a `session_id`). Persistence is **best-effort** — a D1
@@ -63,6 +72,9 @@ Gateway** in prod for caching + rate-limit + cost observability) are non-secret 
 ## What's deliberately NOT here (next slices)
 
 - **Audio render** (`audio_url`) → Phase 3 P1: Worker → Queues → **Container** (Node+Playwright+Chromium+ffmpeg) → R2.
+  The Discord follow-up (P3) posts code + a play link today; when P1 lands it will attach the rendered audio.
+- **Registering the slash command** with Discord (one-time `PUT /applications/{id}/commands`) is an operator
+  step, not code here — the webhook handler is built + tested.
 - **The authoritative `@strudel/transpiler` parse-gate** → P1 (ships with the Container). `validateStrudel()`
   here is a lightweight structural pre-check that catches prose-instead-of-code and the `[ ...whole program... ]`
   wrap bug; it is not a full parse.
