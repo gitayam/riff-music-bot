@@ -41,6 +41,15 @@ check("includes a strudel.cc link per section", joined.count("https://strudel.cc
 check("surfaces the spoken words + voice", "I bite my tongue" in joined and "onyx" in joined)
 check("a plain loop yields no section messages", sw.section_messages('setcpm(120/4)\nstack(sound("bd*4"))') == [])
 
+# chat steering: only an explicit !radio/!steer/🎛️ command steers; a normal request must not.
+check("'!radio darker faster' → 'darker faster'", sw.steer_from_message("!radio darker faster") == "darker faster")
+check("'!steer slow' → 'slow'", sw.steer_from_message("!steer slow") == "slow")
+check("'🎛️ dense' → 'dense'", sw.steer_from_message("🎛️ dense") == "dense")
+check("'!radio DARKER' lowercased", sw.steer_from_message("!radio DARKER") == "darker")
+check("'!radio clear' → '' (explicit clear)", sw.steer_from_message("!radio clear") == "")
+check("a normal request is NOT a steer command", sw.steer_from_message("make a darker song") is None)
+check("plain chat is NOT a steer command", sw.steer_from_message("hey what's up") is None)
+
 # a section so layer-heavy its own link exceeds the limit is dropped (never an oversized message);
 # the normal sections still come through, and a string with brackets must not mis-split it.
 fat = ",\n  ".join(f'sound("hh*8").gain(0.{40 + i})' for i in range(70))

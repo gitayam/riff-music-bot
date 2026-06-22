@@ -30,7 +30,23 @@ CODE_RE = re.compile(r"```(?:javascript|js)?\s*\n(.*?)```", re.S)
 VOICE_RE = re.compile(r"(?:🎤|🎙️?)\s*say\s*(?:\[\s*([a-z]+)\s*\])?\s*:\s*(.+)", re.I)
 VOICES = {"alloy","ash","ballad","coral","echo","fable","nova","onyx","sage","shimmer","verse","marin","cedar"}
 SONG_RE = re.compile(r"\barrange\s*\(")          # a full song (vs a single loop)
+# chat steering (opt-in): if RADIO_STEER_FILE is set, a message like "!radio darker faster" writes
+# that hint to the radio's steer file (radio.sh re-reads it each segment) — letting the community
+# steer a running generative radio from Discord. Dormant unless RADIO_STEER_FILE is set in the env.
+RADIO_STEER_FILE = os.environ.get("RADIO_STEER_FILE")
+STEER_CMD_RE = re.compile(r"^\s*(?:!radio|!steer|🎛️?)\s*(?:steer\s+)?(.+)$", re.I)
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or sys.exit("DISCORD_BOT_TOKEN not set (source .env)")
+
+
+def steer_from_message(content):
+    """A chat steer command → the hint to write to the radio steer file; None if not a command,
+    or '' to explicitly clear. Only an explicit !radio/!steer/🎛️ prefix triggers (so a normal
+    'make a darker song' request is NOT mistaken for a steer)."""
+    m = STEER_CMD_RE.match(content or "")
+    if not m:
+        return None
+    hint = " ".join(m.group(1).split())[:120].lower()
+    return "" if hint in ("clear", "reset", "off", "stop", "none") else hint
 
 
 def section_messages(code, say=None, voice=None):
@@ -112,6 +128,14 @@ def cycle(send):
             continue
         for m in msgs:
             state[ch] = m["id"]
+            if RADIO_STEER_FILE:                       # chat steering (any author) for a running radio
+                sh = steer_from_message(m.get("content", ""))
+                if sh is not None:
+                    try:
+                        with open(RADIO_STEER_FILE, "w") as f: f.write(sh)
+                        print(f"  ch {ch} msg {m['id']}: radio steer → {sh or '(cleared)'}")
+                    except Exception as e:
+                        print(f"    steer write failed: {e}")
             if m["author"]["id"] != bot_id: continue
             if int(m.get("flags", 0)) & 8192: continue             # already a voice message
             mm = CODE_RE.search(m.get("content", ""))
