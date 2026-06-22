@@ -60,6 +60,22 @@ else
   meh "music API not running (./scripts/api-server.sh, or load com.zeroclaw.music-api) — only needed for external HTTP access"
 fi
 
+echo "── offline render (no-CDN guarantee: @strudel/web bundle must load from local node_modules)"
+# Renders a synth pattern with ALL non-localhost requests blocked. If the bundle were still
+# loaded from a CDN (esm.sh) the page would error and produce no WAV — so a passing render
+# here proves the bundle is vendored local and a network blip can't blank the render.
+if [ -d "$root/render/node_modules" ]; then
+  _off=/tmp/_doc_offline.wav; rm -f "$_off"
+  if printf '%s' 'note("c3 eb3 g3").sound("sawtooth").lpf(900)' \
+       | STRUDEL_BLOCK_EXTERNAL=1 timeout 150 node "$root/render/strudel-render.mjs" "$_off" 2 >/dev/null 2>&1 \
+       && [ -f "$_off" ] && [ "$(wc -c < "$_off" 2>/dev/null || echo 0)" -gt 1000 ]; then
+    ok "renders with all CDNs blocked ($(wc -c < "$_off") bytes — bundle is local)"
+  else
+    no "offline render FAILED → @strudel/web may be loading from a CDN again (network blip = dead render)"
+  fi
+  rm -f "$_off"
+else meh "skipped offline render check (render/ deps missing)"; fi
+
 echo "── full chain smoke test (gate → faithful render → ogg → waveform; ~15s, posts nothing)"
 if [ -d "$root/render/node_modules" ] && command -v ffmpeg >/dev/null; then
   smoke='setcpm(120/4)
