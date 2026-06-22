@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Always-on launchd agent for the Strudel → Discord voice-message auto-delivery watcher.
+  Polls for the bot's own Strudel-block replies and posts a rendered voice message for each.
+  Runs via scripts/watch.sh so the .env secrets (bot token + guild) are loaded.
+  Install:  cp this to ~/Library/LaunchAgents/ then:
+            launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.zeroclaw.strudel-watch.plist
+  Stop:     launchctl bootout gui/$(id -u)/com.zeroclaw.strudel-watch
+  Restart:  launchctl kickstart -k gui/$(id -u)/com.zeroclaw.strudel-watch
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zeroclaw.strudel-watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/sac/Git/llms-local/zeroclaw/scripts/watch.sh</string>
+        <string>8</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/sac/Git/llms-local/zeroclaw</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/sac</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/sac/Git/llms-local/zeroclaw/strudel-watch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/sac/Git/llms-local/zeroclaw/strudel-watch.log</string>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

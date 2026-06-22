@@ -1,0 +1,79 @@
+schema_version = 3
+locale = "en"
+
+# ── LLM provider: Mistral (reused from hermes' MISTRAL_HERMES key) ──
+# The api_key is intentionally NOT here. run.sh injects it at runtime from
+# the gitignored .env via ZEROCLAW_providers__models__mistral__hermes__api_key
+# so no secret ever lands in a committed file.
+[providers.models.mistral.hermes]
+model = "mistral-large-latest"
+
+# ── OpenAI GPT-5.4 — the creative music model (key injected from .env OPENAI_API) ──
+# Deliberately NO temperature / max_tokens: GPT-5.4 rejects both on chat/completions.
+# api_key is injected at runtime by run.sh via ZEROCLAW_providers__models__openai__gpt5__api_key.
+[providers.models.openai.gpt5]
+model = "gpt-5.4"
+# Resilience: try a cheaper/faster model on the SAME OpenAI key first, then fall over to
+# Mistral entirely. Without this a single gpt-5.4 hiccup (429/5xx/outage) hard-fails the bot.
+fallback_models = ["gpt-5.4-mini"]
+fallback = ["mistral.hermes"]
+
+# ── Agent: "hermes" ──
+[agents.hermes]
+model_provider = "openai.gpt5"
+risk_profile = "default"
+runtime_profile = "default"
+channels = ["discord.default"]
+
+[agents.hermes.identity]
+format = "openclaw"
+
+# ── Discord channel ──
+# bot_token is a REQUIRED field, so a harmless placeholder lives here to keep
+# this table valid; run.sh overrides it at runtime with the REAL token from the
+# gitignored .env via ZEROCLAW_channels__discord__default__bot_token. The real
+# secret never lands in this committed file.
+[channels.discord.default]
+enabled = true
+bot_token = "set-via-env-override"
+guild_ids = ["1518361274256326797"]
+mention_only = true
+
+# ── Who may talk to the agent (allowlist) ──
+# zeroclaw denies everyone by default; an EMPTY allowlist = nobody gets through
+# (that's why early messages were logged "unauthorized user"). external_peers =
+# ["*"] accepts anyone on the discord channel. Tighten later by listing Discord
+# user IDs instead of "*".
+[peer_groups.discord_public]
+channel = "discord.default"
+agents = ["hermes"]
+external_peers = ["*"]
+
+# ── Profiles referenced by [agents.hermes] (must exist by name) ──
+[risk_profiles.default]
+allowed_commands = ["ls", "git", "cat"]
+allowed_roots = ["~/workspace"]
+always_ask = []
+auto_approve = ["weather"]
+block_high_risk_commands = true
+excluded_tools = ["browser"]
+forbidden_paths = ["/etc", "/root"]
+level = "supervised"
+require_approval_for_medium_risk = true
+shell_env_passthrough = ["PATH", "HOME"]
+workspace_only = true
+
+[runtime_profiles.default]
+compact_context = false
+keep_tool_context_turns = 2
+max_actions_per_hour = 100
+max_context_tokens = 32000
+max_cost_per_day_cents = 1000
+max_history_messages = 50
+max_system_prompt_chars = 0
+max_tool_iterations = 10
+max_tool_result_chars = 50000
+parallel_tools = true
+shell_timeout_secs = 60
+tool_call_dedup_exempt = []
+tool_dispatcher = "auto"

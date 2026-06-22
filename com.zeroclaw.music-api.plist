@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Always-on launchd agent for the synchronous music API (scripts/api-server.py).
+  Gives other groups a real HTTP "prompt → {code, audio}" service. Runs via
+  scripts/api-server.sh so .env (MUSIC_API_TOKEN auth + OPENAI_API for the agent) is loaded.
+  Expose externally with a Cloudflare tunnel: cloudflared tunnel --url http://localhost:8799
+  Install:  cp this to ~/Library/LaunchAgents/ then:
+            launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.zeroclaw.music-api.plist
+  Stop:     launchctl bootout gui/$(id -u)/com.zeroclaw.music-api
+  Restart:  launchctl kickstart -k gui/$(id -u)/com.zeroclaw.music-api
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zeroclaw.music-api</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/sac/Git/llms-local/zeroclaw/scripts/api-server.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/sac/Git/llms-local/zeroclaw</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/sac</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/sac/Git/llms-local/zeroclaw/music-api.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/sac/Git/llms-local/zeroclaw/music-api.log</string>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

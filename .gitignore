@@ -1,0 +1,35 @@
+# ── Secrets — NEVER commit. Real keys/tokens live only in .env ──
+.env
+.env.*
+!.env.example
+.secret_key
+secrets
+
+# ── node deps for the local Strudel renderer (run `npm install` in scripts/render) ──
+scripts/render/node_modules/
+
+# ── zeroclaw runtime state / data (ZEROCLAW_DATA_DIR = this dir) ──
+data/
+agents/
+shared/
+state/
+logs/
+sessions/
+memory/
+project-reports/
+.zeroclaw/
+*.log
+
+# NOTE: config.toml is intentionally committed — it is secret-free by design
+# (the Mistral key and Discord bot token are injected at runtime from .env by
+# run.sh). If you ever run `zeroclaw config set` and it writes a real secret
+# into config.toml, move that secret into .env instead of committing it.
+
+# SimpleX surface — DB (identity!), venv, sessions, logs
+simplex/zeroclaw_*.db
+simplex/*.db
+simplex/venv/
+simplex/sessions/
+simplex/*.log
+simplex/files/
+simplex/group-link.txt

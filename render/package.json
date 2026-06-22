@@ -1,0 +1,11 @@
+{
+  "name": "zeroclaw-strudel-render",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Local headless Strudel -> WAV render for ZeroClaw / Riff (Discord voice messages)",
+  "dependencies": {
+    "@strudel/web": "^1.3.0",
+    "playwright": "^1.61.0"
+  }
+}
