@@ -16,6 +16,9 @@
 # Listen:  ffplay http://localhost:8123/stream.m3u8  (or VLC / Safari).  Ctrl-C stops it.
 # Steer:   echo a hint into <outdir>/steer and the NEXT segments follow it (re-read each segment) —
 #          e.g.  echo 'darker faster' > /tmp/radio/steer   (words: dark/bright, fast/slow, dense/sparse)
+#          The player's buttons, chat `!radio …`, and radio-mood.py (channel-mood, Situation D) all
+#          write this same file. Auto mood-match: RADIO_MOOD_CHANNEL=<id> RADIO_STEER_FILE=<outdir>/steer
+#          python3 scripts/radio-mood.py   (reads a channel's recent vibe → steers the stream).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
