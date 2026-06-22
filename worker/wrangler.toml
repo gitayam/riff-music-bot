@@ -1,0 +1,24 @@
+# Riff music API — Cloudflare Worker (Phase 3 P0). Tier-A: prompt → Strudel code + share link.
+# Deploy:  npx wrangler deploy            (set secrets first, see below)
+# Dev:     npx wrangler dev               (reads .dev.vars — gitignored — for local secrets)
+name = "riff-music-api"
+main = "src/index.js"
+compatibility_date = "2026-06-01"
+# No compat flags needed: the Worker uses only fetch/btoa/TextEncoder/AbortController (all in workerd).
+
+# Non-secret config. Point OPENAI_BASE_URL at a Cloudflare AI Gateway in prod for caching +
+# rate-limit + cost observability at ~0 added latency (Phase 3 mapping table).
+[vars]
+OPENAI_MODEL = "gpt-5.4"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+[observability]
+enabled = true
+
+# Secrets (NOT stored here — set per-environment):
+#   npx wrangler secret put OPENAI_API_KEY     # the gpt-5.4 key (local .env OPENAI_API)
+#   npx wrangler secret put MUSIC_API_TOKEN    # the shared bearer other groups send
+# For `wrangler dev`, put the same two in worker/.dev.vars (gitignored). See .dev.vars.example.
+
+# A stable custom-domain route retires the ephemeral quick tunnel (uncomment + set your zone):
+# routes = [{ pattern = "music.example.com", custom_domain = true }]

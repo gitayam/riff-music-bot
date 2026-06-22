@@ -1,0 +1,16 @@
+{
+  "name": "riff-music-api-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Riff music API on Cloudflare Workers (Phase 3 P0, Tier-A: prompt -> Strudel + share link)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "dry-run": "wrangler deploy --dry-run --outdir=.wrangler/dry",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
