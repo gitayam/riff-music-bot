@@ -20,6 +20,7 @@ the hard part (headless-Chromium render in a Container).
 | `POST /modify` | `{session_id, instruction, repair_attempts?=2}` | `{strudel_code, share_url, diff, version, parent_id, …}` — edits the session's latest version |
 | `POST /render` | `{code, session_id?}` | same shape (validates + links code you already have; never rewrites it) |
 | `GET /history` | `?session_id=…&limit=…` | `{tracks:[…]}` — cross-session history from D1, newest first (bearer-gated) |
+| `GET /audio/<key>` | — | serves a rendered audio file from R2 (public) |
 | `POST /discord/interactions` | Discord Interaction (Ed25519-signed) | PING→PONG; slash command→deferred ack, then a follow-up with code + ▶ link |
 
 `POST` (except `/discord/interactions`) and `GET /history` require `Authorization: Bearer <MUSIC_API_TOKEN>`
@@ -33,6 +34,14 @@ app's public key (`DISCORD_PUBLIC_KEY`), answers the PING handshake, and for a s
 3 s with a deferred response** then composes the Strudel in `waitUntil()` and **edits the original message**
 (via the interaction token — no bot token needed) with the code + `strudel.cc` link. After deploy, set the
 app's *Interactions Endpoint URL* to `https://<worker>/discord/interactions`.
+
+**Rendered audio (P1 last mile):** set `RENDER_SERVICE_URL` to the render Container (`../container/`) and
+bind the `AUDIO` R2 bucket, and the Worker renders real audio: `/render` (and `/generate`/`/modify` with
+`render:true`) POST the code to the render service, store the returned audio in R2, and return an
+`audio_url` served at `GET /audio/<key>`. Rendering is **best-effort** — on failure the response degrades
+to `audio_url:null` + a `render_error` field (you always get the code + play link). Unset
+`RENDER_SERVICE_URL` → Tier-A (code + link only). Locally, run `../container/server.mjs` as the backend
+and `wrangler dev` provides a local R2 — the whole path is testable without an account.
 
 **History + retention (D1):** every generate/modify/render is logged as a `tracks` row (Contract 5),
 queryable via `GET /history` (optionally scoped to a `session_id`). Persistence is **best-effort** — a D1
@@ -71,8 +80,12 @@ Gateway** in prod for caching + rate-limit + cost observability) are non-secret 
 
 ## What's deliberately NOT here (next slices)
 
-- **Audio render** (`audio_url`) → Phase 3 P1: Worker → Queues → **Container** (Node+Playwright+Chromium+ffmpeg) → R2.
-  The Discord follow-up (P3) posts code + a play link today; when P1 lands it will attach the rendered audio.
+- **Deploying the render Container.** The Worker↔render-service↔R2 path is built + tested locally (render
+  service as a node process, local R2). In prod the render service is a CF **Container** (`../container/`)
+  and, for scale, a **Queue** decouples the render from the 3 s response. Building the image needs a Docker
+  daemon; the Container/Queue bindings need a Workers Paid account.
+- **Attaching rendered audio to the Discord follow-up.** P3 posts code + a play link; wiring `render:true`
+  into the Discord follow-up (multipart upload of the rendered file) is the next P3 step.
 - **Registering the slash command** with Discord (one-time `PUT /applications/{id}/commands`) is an operator
   step, not code here — the webhook handler is built + tested.
 - **The authoritative `@strudel/transpiler` parse-gate** → P1 (ships with the Container). `validateStrudel()`

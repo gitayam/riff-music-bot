@@ -22,14 +22,18 @@ test("retentionCutoff subtracts whole days; never negative days", () => {
 
 test("buildTrackRow fills every column (?? null), id/created_at injectable", () => {
   const row = buildTrackRow(
-    { strudel_code: "stack(sound(\"bd*4\"))", share_url: "https://strudel.cc/#x", source: "modify", session_id: "s1", instruction: "darker", parent_id: "p1", version: 3 },
+    { strudel_code: "stack(sound(\"bd*4\"))", share_url: "https://strudel.cc/#x", audio_url: "https://r/audio/tracks/id1.mp3", source: "modify", session_id: "s1", instruction: "darker", parent_id: "p1", version: 3 },
     "id1", 123
   );
   assert.deepEqual(row, {
     id: "id1", session_id: "s1", prompt: null, instruction: "darker", source: "modify",
     strudel_code: "stack(sound(\"bd*4\"))", share_url: "https://strudel.cc/#x",
-    parent_id: "p1", version: 3, created_at: 123,
+    audio_url: "https://r/audio/tracks/id1.mp3", parent_id: "p1", version: 3, created_at: 123,
   });
+});
+
+test("buildTrackRow defaults audio_url to null", () => {
+  assert.equal(buildTrackRow({ strudel_code: "x", share_url: "y" }, "id3", 1).audio_url, null);
 });
 
 test("buildTrackRow defaults source=generate, version=1, nulls", () => {

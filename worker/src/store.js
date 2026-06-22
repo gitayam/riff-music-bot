@@ -16,6 +16,7 @@ export const SCHEMA_STMTS = [
      source       TEXT NOT NULL,
      strudel_code TEXT NOT NULL,
      share_url    TEXT NOT NULL,
+     audio_url    TEXT,
      parent_id    TEXT,
      version      INTEGER NOT NULL DEFAULT 1,
      created_at   INTEGER NOT NULL
@@ -49,6 +50,7 @@ export function buildTrackRow(p, id, createdAt) {
     source: p.source || "generate",
     strudel_code: p.strudel_code,
     share_url: p.share_url,
+    audio_url: p.audio_url ?? null,
     parent_id: p.parent_id ?? null,
     version: p.version ?? 1,
     created_at: createdAt ?? nowSec(),
@@ -75,11 +77,11 @@ export async function insertTrack(env, row) {
   try {
     await ensureSchema(env.DB);
     await env.DB.prepare(
-      `INSERT INTO tracks (id, session_id, prompt, instruction, source, strudel_code, share_url, parent_id, version, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO tracks (id, session_id, prompt, instruction, source, strudel_code, share_url, audio_url, parent_id, version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       row.id, row.session_id, row.prompt, row.instruction, row.source,
-      row.strudel_code, row.share_url, row.parent_id, row.version, row.created_at
+      row.strudel_code, row.share_url, row.audio_url, row.parent_id, row.version, row.created_at
     ).run();
     return row.id;
   } catch (e) {

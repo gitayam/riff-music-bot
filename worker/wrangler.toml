@@ -13,6 +13,9 @@ OPENAI_MODEL = "gpt-5.4"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 RETENTION_DAYS = "30"   # tracks older than this are pruned by the daily cron (D1 10 GB cap)
 DISCORD_API_BASE = "https://discord.com/api/v10"   # interaction follow-ups (PATCH @original)
+# RENDER_SERVICE_URL: the render Container's URL (container/). When set + AUDIO bound, /render (and
+# /generate|/modify with render:true) render real audio → R2 → served at /audio/<key>. Unset = Tier-A
+# (code + link only). Set as a var or, with a Container binding, point at the bound service URL.
 
 [observability]
 enabled = true
@@ -30,6 +33,13 @@ migrations_dir = "migrations"
 # Daily retention prune (scheduled() → pruneTracks). 04:00 UTC.
 [triggers]
 crons = ["0 4 * * *"]
+
+# Rendered audio (Phase 3 P1 last mile). The render Container writes WAV→mp3/ogg here; the Worker
+# serves it at GET /audio/<key>. Create once: `wrangler r2 bucket create riff-audio`. Local
+# `wrangler dev` uses a local R2 (no account needed). Add a retention/lifecycle rule in prod.
+[[r2_buckets]]
+binding = "AUDIO"
+bucket_name = "riff-audio"
 
 # Per-session modify chain (Phase 3 P2). One Durable Object per conversation (session_id) holds
 # the ordered code versions so /modify edits the last one. SQLite-backed; runs locally in `wrangler dev`.

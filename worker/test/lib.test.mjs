@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { shareUrl, b64utf8, extractStrudel, validateStrudel, buildChatBody, SYSTEM_PROMPT, lineDiff, diffString, modifyUserContent } from "../src/lib.js";
+import { shareUrl, b64utf8, extractStrudel, validateStrudel, buildChatBody, SYSTEM_PROMPT, lineDiff, diffString, modifyUserContent, audioFormat, audioContentType, audioKey, audioUrlFor } from "../src/lib.js";
 
 const SAMPLE = 'setcpm(120/4)\nstack(sound("bd*4"))';
 
@@ -90,4 +90,15 @@ test("modifyUserContent embeds the current code and the change", () => {
   assert.match(c, /stack\(sound\("bd\*4"\)\)/);
   assert.match(c, /make it darker/);
   assert.match(c, /FULL updated program/);
+});
+
+test("audio helpers: format allowlist, content-type, key, and served URL", () => {
+  assert.equal(audioFormat("ogg"), "ogg");
+  assert.equal(audioFormat("flac"), "mp3"); // not allowlisted → default
+  assert.equal(audioContentType("mp3"), "audio/mpeg");
+  assert.equal(audioContentType("wav"), "audio/wav");
+  assert.equal(audioKey("abc", "ogg"), "tracks/abc.ogg");
+  assert.equal(audioKey("abc", "weird"), "tracks/abc.mp3");
+  assert.equal(audioUrlFor("https://riff.example.com/render?x=1", "tracks/abc.mp3"),
+    "https://riff.example.com/audio/tracks/abc.mp3");
 });

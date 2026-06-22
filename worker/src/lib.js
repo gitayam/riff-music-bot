@@ -119,3 +119,13 @@ export function diffString(a, b) {
     .map((d) => `${d.tag} ${d.line}`)
     .join("\n");
 }
+
+// ── Rendered-audio helpers (P1 last mile: render service → R2 → served at GET /audio/<key>) ──
+const AUDIO_CT = { mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav" };
+export const audioFormat = (f) => (["mp3", "ogg", "wav"].includes(f) ? f : "mp3");
+export const audioContentType = (f) => AUDIO_CT[audioFormat(f)];
+export const audioKey = (id, format) => `tracks/${id}.${audioFormat(format)}`;
+// Absolute, embeddable URL for an R2-stored render: this Worker's origin + the /audio/<key> route.
+export function audioUrlFor(requestUrl, key) {
+  return `${new URL(requestUrl).origin}/audio/${key}`;
+}

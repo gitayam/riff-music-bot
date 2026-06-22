@@ -59,6 +59,25 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
 python3 "$dmock" "$DPORT" "$DLOG" & DMOCK_PID=$!
 
+# Mock render service (stands in for the Container): returns canned audio bytes, or 500 for a sentinel
+# so we can test the render-failure degrade path. The real engine is covered by container/test.sh.
+RPORT=8792; rmock=/tmp/worker-rmock.$$.py
+cat > "$rmock" <<'PY'
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+AUDIO = b"ID3\x03\x00" + b"\x00"*512   # fake mp3 bytes
+class H(BaseHTTPRequestHandler):
+    def log_message(self,*a): pass
+    def do_POST(self):
+        n=int(self.headers.get("Content-Length","0")); body=self.rfile.read(n).decode("utf8","ignore")
+        if "BOOMFAIL" in body:
+            self.send_response(500); self.send_header("Content-Length","0"); self.end_headers(); return
+        self.send_response(200); self.send_header("Content-Type","audio/mpeg")
+        self.send_header("Content-Length",str(len(AUDIO))); self.end_headers(); self.wfile.write(AUDIO)
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+python3 "$rmock" "$RPORT" & RMOCK_PID=$!
+
 # Ed25519 keypair for the Discord signature test — public key (hex) goes to the Worker via --var.
 KEYFILE=/tmp/worker-dkey.$$.json
 DPUB=$(node test/dev-sign.mjs genkey "$KEYFILE")
@@ -71,10 +90,11 @@ wrangler dev --port "$PORT" --inspector-port 0 --ip 127.0.0.1 --persist-to "$STA
   --var "MUSIC_API_TOKEN:$TOK" --var "OPENAI_API_KEY:mock-key" \
   --var "OPENAI_BASE_URL:http://127.0.0.1:$MOCKPORT" \
   --var "DISCORD_PUBLIC_KEY:$DPUB" --var "DISCORD_API_BASE:http://127.0.0.1:$DPORT" \
+  --var "RENDER_SERVICE_URL:http://127.0.0.1:$RPORT" \
   >/tmp/worker-dev.$$ 2>&1 </dev/null & DEV_PID=$!
 
-cleanup(){ kill "$DEV_PID" "$MOCK_PID" "$DMOCK_PID" 2>/dev/null; wait "$DEV_PID" 2>/dev/null;
-           rm -rf "$mock" "$dmock" "$DLOG" "$KEYFILE" /tmp/worker-dev.$$ "$STATE"; }
+cleanup(){ kill "$DEV_PID" "$MOCK_PID" "$DMOCK_PID" "$RMOCK_PID" 2>/dev/null; wait "$DEV_PID" 2>/dev/null;
+           rm -rf "$mock" "$dmock" "$rmock" "$DLOG" "$KEYFILE" /tmp/worker-dev.$$ "$STATE"; }
 trap cleanup EXIT
 
 base="http://127.0.0.1:$PORT"
@@ -162,6 +182,27 @@ get "/history?session_id=ghost-session"
 
 get "/history?limit=100"
 { [ "$CODE" = 200 ] && has 'RolandTR909'; } && ok "GET /history (global) → tracks" || bad "history global (code=$CODE)"
+
+# Rendered audio (P1 last mile): render service → R2 → served at /audio/<key>.
+post /render '{"code":"setcpm(120/4)\nstack(sound(\"bd*4\"))","format":"mp3"}'
+AUDIO_URL=$(printf '%s' "$RESP" | grep -o '"audio_url":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')
+{ [ "$CODE" = 200 ] && printf '%s' "$AUDIO_URL" | grep -q '/audio/tracks/'; } \
+  && ok "POST /render → renders + stores → audio_url" || bad "render audio_url (code=$CODE url=$AUDIO_URL)"
+
+ac=$(curl -s -o /tmp/worker-audio.$$ -w '%{http_code}' "$AUDIO_URL"); asz=$(wc -c < /tmp/worker-audio.$$ | tr -d ' ')
+{ [ "$ac" = 200 ] && [ "${asz:-0}" -gt 100 ]; } && ok "GET audio_url → 200 audio bytes ($asz) from R2" || bad "serve audio (http=$ac sz=$asz)"
+
+post /generate '{"prompt":"chill loop","render":true}'
+{ [ "$CODE" = 200 ] && printf '%s' "$RESP" | grep -o '"audio_url":"[^"]*"' | grep -q '/audio/'; } \
+  && ok "POST /generate render:true → audio_url" || bad "generate render:true (code=$CODE)"
+
+post /generate '{"prompt":"chill loop"}'
+{ [ "$CODE" = 200 ] && has '"audio_url":null'; } && ok "POST /generate (default) → audio_url null (Tier-A)" || bad "generate no-render"
+
+post /render '{"code":"setcpm(120/4)\nstack(sound(\"BOOMFAIL bd*4\"))","format":"mp3"}'
+{ [ "$CODE" = 200 ] && has '"audio_url":null' && has '"render_error"'; } \
+  && ok "render failure degrades → audio_url null + render_error" || bad "render degrade (code=$CODE)"
+rm -f /tmp/worker-audio.$$
 
 # Retention cron: backdate a row, fire scheduled(), confirm it's pruned and recent rows survive.
 # (wrangler d1 execute on the same local DB while dev runs can hit a lock; tolerate that → wiring-only.)

@@ -17,7 +17,7 @@
 
 import {
   shareUrl, extractStrudel, validateStrudel, buildChatBody, repairPrompt,
-  modifyUserContent, diffString,
+  modifyUserContent, diffString, audioFormat, audioKey, audioUrlFor, audioContentType,
 } from "./lib.js";
 import { Session } from "./session.js";
 import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec } from "./store.js";
@@ -116,6 +116,37 @@ function sessionStub(env, sessionId) {
   return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId));
 }
 
+// P1 last mile: render the code to audio via the render service (a Container in prod; a node process
+// locally) and store it in R2, returning a served audio_url. BEST-EFFORT — you always get the code +
+// share link; the rendered audio is a bonus, so any failure degrades to {render_error}, never throws.
+// Returns {} when rendering isn't wanted/configured (Tier-A), {audio_url} on success, {render_error} on failure.
+async function tryRender(env, { code, cycles, format, id, requestUrl, want }) {
+  if (!want) return {};
+  if (!env.RENDER_SERVICE_URL || !env.AUDIO) return {}; // not wired (Tier-A) — no error, just no audio
+  const fmt = audioFormat(format);
+  try {
+    const r = await fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, cycles, format: fmt }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) return { render_error: `render service returned ${r.status}` };
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    if (bytes.length === 0) return { render_error: "render service returned empty audio" };
+    const key = audioKey(id, fmt);
+    await env.AUDIO.put(key, bytes, { httpMetadata: { contentType: audioContentType(fmt) } });
+    return { audio_url: audioUrlFor(requestUrl, key) };
+  } catch (e) {
+    return { render_error: String(e.message || e).slice(0, 150) };
+  }
+}
+
+// Whether to render for this request: /render renders by default, /generate & /modify only on req.render===true.
+function wantsRender(path, req) {
+  return path === "/render" ? req.render !== false : req.render === true;
+}
+
 async function handlePost(request, env, path) {
   // Auth — same contract as api-server.py: no token configured OR mismatch → 401.
   const auth = request.headers.get("Authorization") || "";
@@ -139,13 +170,14 @@ async function handlePost(request, env, path) {
       if (!prev) return json(404, { error: "unknown session_id — call /generate with this session_id first" });
       const code = await composeValid(env, modifyUserContent(prev.code, req.instruction), req.repair_attempts);
       const share = shareUrl(code);
+      const trackId = newId();
+      const rendered = await tryRender(env, { code, cycles: req.cycles, format: req.format, id: trackId, requestUrl: request.url, want: wantsRender(path, req) });
       // Persist FIRST (so the D1 row id can be stored in the DO version for parent-linking), then
       // append to the DO. Both happen only after composeValid succeeded — an invalid modify (422)
       // never advances the chain.
-      const trackId = newId();
       await insertTrack(env, buildTrackRow({
-        session_id: req.session_id, instruction: req.instruction, source: "modify",
-        strudel_code: code, share_url: share, parent_id: prev.track_id ?? null, version: prev.version + 1,
+        session_id: req.session_id, instruction: req.instruction, source: "modify", strudel_code: code,
+        share_url: share, audio_url: rendered.audio_url ?? null, parent_id: prev.track_id ?? null, version: prev.version + 1,
       }, trackId));
       const version = await stub.append({ code, share_url: share, source: "modify", instruction: req.instruction, track_id: trackId });
       return json(200, {
@@ -154,10 +186,11 @@ async function handlePost(request, env, path) {
         strudel_code: code,
         share_url: share,
         diff: diffString(prev.code, code), // show the change — the modify demo's whole point
-        audio_url: null,
+        audio_url: rendered.audio_url ?? null,
+        ...(rendered.render_error ? { render_error: rendered.render_error } : {}),
         version,
         parent_id: prev.version,
-        engine: "tier-a-link",
+        engine: rendered.audio_url ? "audio" : "tier-a-link",
       });
     }
 
@@ -184,11 +217,13 @@ async function handlePost(request, env, path) {
       parentTrackId = prev ? prev.track_id ?? null : null;
       version = (prev ? prev.version : 0) + 1;
     }
-    // Persist to D1 (cross-session history), then record the D1 id in the session's modify chain.
+    // Render to audio if wanted + wired (P1): /render renders by default, /generate on req.render===true.
     const trackId = newId();
+    const rendered = await tryRender(env, { code, cycles: req.cycles, format: req.format, id: trackId, requestUrl: request.url, want: wantsRender(path, req) });
+    // Persist to D1 (cross-session history), then record the D1 id in the session's modify chain.
     await insertTrack(env, buildTrackRow({
       session_id: req.session_id ?? null, prompt: req.prompt ?? null, source,
-      strudel_code: code, share_url: share, parent_id: parentTrackId, version,
+      strudel_code: code, share_url: share, audio_url: rendered.audio_url ?? null, parent_id: parentTrackId, version,
     }, trackId));
     if (req.session_id && typeof req.session_id === "string") {
       await sessionStub(env, req.session_id).append({ code, share_url: share, source, instruction: null, track_id: trackId });
@@ -198,10 +233,11 @@ async function handlePost(request, env, path) {
       session_id: req.session_id ?? null,
       strudel_code: code,
       share_url: share,
-      audio_url: null, // Tier-A: render (audio) lands in Phase 3 P1 (Container)
+      audio_url: rendered.audio_url ?? null, // filled when the render service is wired (else Tier-A null)
+      ...(rendered.render_error ? { render_error: rendered.render_error } : {}),
       version,
       parent_id,
-      engine: "tier-a-link",
+      engine: rendered.audio_url ? "audio" : "tier-a-link",
     });
   } catch (e) {
     return json(e.status || 500, { error: e.status === 422 ? "invalid Strudel" : "error", detail: String(e.message || e) });
@@ -265,6 +301,17 @@ export default {
 
     if (request.method === "GET") {
       if (pathname === "/health") return json(200, { ok: true });
+      if (pathname.startsWith("/audio/")) {
+        // Serve a rendered audio object from R2 (public — it's music, and audio_url must be embeddable).
+        if (!env.AUDIO) return json(503, { error: "audio store not configured" });
+        const key = decodeURIComponent(pathname.slice("/audio/".length));
+        const obj = await env.AUDIO.get(key);
+        if (!obj) return json(404, { error: "not found" });
+        const h = new Headers(CORS);
+        h.set("Content-Type", obj.httpMetadata?.contentType || "application/octet-stream");
+        h.set("Cache-Control", "public, max-age=31536000, immutable");
+        return new Response(obj.body, { headers: h });
+      }
       if (pathname === "/history") {
         // Exposes other sessions' content → bearer-gated like the POSTs.
         const auth = request.headers.get("Authorization") || "";
@@ -286,14 +333,15 @@ export default {
           service: "Riff music API (Cloudflare Worker · Phase 3 P0+P2 · Tier-A link)",
           auth: "Authorization: Bearer <MUSIC_API_TOKEN> on every POST and on GET /history",
           endpoints: {
-            "POST /generate": "{prompt, session_id?, repair_attempts?=2} → {strudel_code, share_url, audio_url:null, version, session_id} (prompt → Strudel via gpt-5.4; auto-repairs invalid Strudel; pass a stable session_id to enable /modify)",
-            "POST /modify": "{session_id, instruction, repair_attempts?=2} → {strudel_code, share_url, diff, version, parent_id} (edits the session's latest version — 'faster' / 'darker' / 'add a bassline' — and returns the code diff)",
-            "POST /render": "{code, session_id?} → same shape (validates + links Strudel you already have)",
+            "POST /generate": "{prompt, session_id?, render?=false, format?, repair_attempts?=2} → {strudel_code, share_url, audio_url, version, session_id} (prompt → Strudel via gpt-5.4; render:true also renders audio when the render service is wired)",
+            "POST /modify": "{session_id, instruction, render?=false, repair_attempts?=2} → {strudel_code, share_url, diff, audio_url, version, parent_id} (edits the session's latest version — 'faster' / 'darker' — and returns the code diff)",
+            "POST /render": "{code, session_id?, format?=mp3} → renders to audio (audio_url) when the render service is wired, else validates + links",
+            "GET /audio/<key>": "serves a rendered audio file from R2 (public)",
             "GET /history": "?session_id=…&limit=…(≤100, default 20) → {tracks:[…]} (cross-session history from D1, newest first)",
             "POST /discord/interactions": "Discord Interactions webhook (Ed25519-signed, not bearer): PING→PONG, slash command→deferred ack then a follow-up with code + ▶ link",
             "GET /health": "{ok:true}",
           },
-          note: "Tier-A: code + a one-click strudel.cc play link, a per-session modify chain (Durable Object), and cross-session history (D1, daily-pruned). Audio render (audio_url) arrives in Phase 3 P1 (Container).",
+          note: "Edge orchestrator: code + a strudel.cc link, a per-session modify chain (DO), cross-session history (D1), and — when the render service (Container) is wired — real rendered audio in R2 served at /audio/<key>.",
         });
       }
       return json(404, { error: "not found" });

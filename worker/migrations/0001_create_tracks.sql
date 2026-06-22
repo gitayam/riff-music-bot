@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   source       TEXT NOT NULL,
   strudel_code TEXT NOT NULL,
   share_url    TEXT NOT NULL,
+  audio_url    TEXT,
   parent_id    TEXT,
   version      INTEGER NOT NULL DEFAULT 1,
   created_at   INTEGER NOT NULL
