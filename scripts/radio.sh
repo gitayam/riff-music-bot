@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# radio.sh — Phase-4 P0: a continuous generative radio. Renders a sequence of Strudel patterns
-# into HLS audio segments and appends them to a live .m3u8, so a player hears an endless stream
-# that keeps being created. P0 cycles a seed set, rendered offline from the cached sample packs;
-# the evolution engine (derive each next pattern from the last) and agent-generated segments are P1.
+# radio.sh — Phase-4 continuous generative radio. Renders an evolving sequence of Strudel patterns
+# (from radio-compose.mjs) into HLS audio segments and appends them to a live .m3u8, so a player
+# hears an endless stream that keeps being created and morphs over time. Renders offline from the
+# cached sample packs. With --window it keeps a rolling segment window so it can run 24/7.
 #
-#   scripts/radio.sh <outdir> [--max-segments N] [--cycles C]
+#   scripts/radio.sh <outdir> [--max-segments N] [--cycles C] [--window W]
 #     --max-segments N : stop after N (bounded → playlist closed as VOD). 0/omitted = forever (live).
 #     --cycles C       : Strudel cycles per segment (segment length). Default 8.
+#     --window W       : keep only the last W segments on disk + in the playlist (rolling window;
+#                        bumps EXT-X-MEDIA-SEQUENCE). 0/omitted = keep all. Use W>0 for a 24/7 stream.
 #
 # Listen:  ( cd <outdir> && python3 -m http.server 8123 )
 #          then open http://localhost:8123/stream.m3u8 in ffplay / VLC / Safari.  Ctrl-C stops it.
@@ -17,10 +19,11 @@ render="$root/render/strudel-render.mjs"   # faithful (offline via cached packs)
 gate="$here/render/render.mjs"             # pure-node parse-gate
 
 outdir="${1:?usage: radio.sh <outdir> [--max-segments N] [--cycles C]}"; shift || true
-max=0; cyc=8
+max=0; cyc=8; window=0
 while [ $# -gt 0 ]; do case "$1" in
   --max-segments) shift; max="${1:?--max-segments needs a number}" ;;
   --cycles) shift; cyc="${1:?--cycles needs a number}" ;;
+  --window) shift; window="${1:?--window needs a number}" ;;
   *) echo "radio.sh: unknown arg '$1'" >&2; exit 2 ;;
 esac; shift; done
 
@@ -33,9 +36,18 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 # (909/808/dirt/piano) → renders offline. (P1-next: derive from the *previous* segment + agent-gen.)
 compose="$here/radio-compose.mjs"
 
-# (Re)start the live playlist. No #EXT-X-ENDLIST while generating → players keep polling for more.
-{ echo "#EXTM3U"; echo "#EXT-X-VERSION:3"; echo "#EXT-X-TARGETDURATION:30"; echo "#EXT-X-MEDIA-SEQUENCE:0"; } > "$m3u8"
-echo "[radio] writing HLS to $m3u8 (cycles/seg=$cyc, max=$max [0=forever])" >&2
+# Rolling live playlist. entries[] holds the kept segments ("file|dur"); media_seq = index of the
+# first kept one (EXT-X-MEDIA-SEQUENCE). Rewritten atomically (temp+mv) each segment so a polling
+# player never reads a half-written file. No #EXT-X-ENDLIST while live → players keep polling.
+entries=(); media_seq=0
+write_playlist() { # $1 == "end" appends #EXT-X-ENDLIST (closes a bounded run as a finished VOD)
+  { echo "#EXTM3U"; echo "#EXT-X-VERSION:3"; echo "#EXT-X-TARGETDURATION:30"; echo "#EXT-X-MEDIA-SEQUENCE:$media_seq"
+    local e; for e in "${entries[@]:-}"; do [ -n "$e" ] && printf '#EXTINF:%s,\n%s\n' "${e#*|}" "${e%%|*}"; done
+    if [ "${1:-}" = "end" ]; then echo "#EXT-X-ENDLIST"; fi
+  } > "$m3u8.tmp" && mv "$m3u8.tmp" "$m3u8"
+}
+write_playlist
+echo "[radio] writing HLS to $m3u8 (cycles/seg=$cyc, max=$max [0=forever], window=$window [0=keep all])" >&2
 
 i=0
 while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
@@ -51,10 +63,15 @@ while [ "$max" -eq 0 ] || [ "$i" -lt "$max" ]; do
        -c:a aac -b:a 128k -ar 44100 -f mpegts "$outdir/$seg" 2>/dev/null; then
     echo "[radio] transcode failed for seg $i — skipping" >&2; i=$((i+1)); continue; fi
   dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$outdir/$seg" 2>/dev/null || echo 15.0)"
-  { printf '#EXTINF:%s,\n' "${dur:-15.0}"; printf '%s\n' "$seg"; } >> "$m3u8"
+  entries+=("$seg|${dur:-15.0}")
+  # rolling window: drop + delete the oldest segment, bump the media sequence
+  if [ "$window" -gt 0 ] && [ "${#entries[@]}" -gt "$window" ]; then
+    old="${entries[0]%%|*}"; rm -f "$outdir/$old"; entries=("${entries[@]:1}"); media_seq=$((media_seq+1))
+  fi
+  write_playlist
   echo "[radio] + $seg (${dur}s)" >&2
   i=$((i+1))
 done
 # A bounded run is a finished VOD; a live (forever) run is left open for players to keep polling.
-[ "$max" -gt 0 ] && echo "#EXT-X-ENDLIST" >> "$m3u8"
+[ "$max" -gt 0 ] && write_playlist end
 echo "[radio] done — $i segment(s) in $m3u8" >&2
