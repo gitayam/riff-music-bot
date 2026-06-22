@@ -351,7 +351,7 @@ Decoupled on purpose: generation (zeroclaw gateway) and render+post (REST-only w
 2. `renderPatternAudio(pattern, cps, begin, end, sampleRate, maxPolyphony, multiChannelOrbits, filename)` uses the **cps we pass**, ignoring the code's `setcpm()`. The driver parses `setcpm(n)`→cps=n/60 / `setcps(n)`→cps=n out of the code (arithmetic-only safe-eval) and passes it.
 3. `initStrudel()`'s default prebake registers **synths only** — drum/sample voices are **silent** until you explicitly `samples(...)`. Do **not** pass an empty `prebake` override (disables all sample loading — a real bug we hit).
 4. **Sample sources moved + CORS:** `github:tidalcycles/dirt-samples` works (github raw sends CORS). Drum machines: `ritchse/tidal-drum-machines` → **renamed to `geikha/…`**, no root `strudel.json`; strudel.cc self-hosts the map but with **no CORS**. Fix: we **vendored `tidal-drum-machines.json` + `piano.json` same-origin** with `_base` injected to the CORS-enabled `raw.githubusercontent.com/geikha/tidal-drum-machines/main/machines/` (and `…/felixroos/dough-samples/main/piano/`). The wavs still fetch at render time.
-5. `render.html` loads `@strudel/web` from the **esm.sh CDN**, so a network blip breaks rendering. Full-offline hardening (vendor/bundle the web bundle + cache the wavs) is the top TODO for demo reliability.
+5. ✅ **Bundle vendored local (Jun 22) — the hard CDN dependency is gone.** `render.html` now imports `@strudel/web@1.3.0` from `./node_modules/@strudel/web/dist/index.mjs` (served same-origin by the renderer's static server), **not** esm.sh — so a network blip can no longer blank the render. (The bundle was the only *hard* dependency; the sample loads below are already soft/caught.) `node_modules` stays gitignored and `setup.sh` `npm install`s it, so we neither commit the AGPL bundle into this MIT repo nor bloat it. The dist bundle is self-contained (vite inlines the audio worklets); its one external asset — the clock worker — resolves relative to the bundle URL under `dist/assets/`, also local. **Proven** by `STRUDEL_BLOCK_EXTERNAL=1` (a test hook in `strudel-render.mjs` that aborts every non-localhost request): a synth pattern still renders ~8.7 s of audio with all CDNs blocked. **Remaining for full offline:** the dirt / drum-machine / piano **sample WAVs** are still fetched lazily from `raw.githubusercontent.com` at render time, so *sampled* (drum) patterns still need the network — vendor/cache those wavs to close it.
 6. Stacked full-gain layers can clip to 0 dBFS — add a small master gain / limiter in the Step-2 ffmpeg pass (e.g. `-af "alimiter=limit=0.95"` or `-filter:a "volume=0.7"`).
 
 **B. ✅ BUILT (other session; superseded as primary) — Pure-node render (`zeroclaw/scripts/render/render.mjs`).** `@strudel/{core,mini,transpiler,tonal}@1.1.0` (pin exact — 1.2.x pulls `SalatRepl` from `@kabelsalat/web` and won't load in node) on **`node-web-audio-api`**; queries haps and hand-synthesizes oscillators + noise-drums (does not use superdough). Instant (~0.2 s), fully offline, no browser. Trade-off: not real Strudel audio (`.bank()` ignored, `piano`→triangle, `.room()/.delay()/.crush()` dropped). **Keep as the instant-fallback** behind A.
@@ -552,9 +552,200 @@ curl -H "Authorization: Bearer $ZEROCLAW_API_TOKEN" \
 
 ---
 
+## Phase 3 — Off the laptop: migrate ZeroClaw to Cloudflare
+
+> **Why now.** Today the whole stack lives on one Mac — three launchd services (daemon, watcher,
+> music-api) behind an **ephemeral** quick tunnel whose URL rotates on every restart, the laptop has
+> to stay awake, and a single sleep/crash takes the bot down. The Sundai ethos is *get off localhost*.
+> This phase moves the orchestrator, render, persistence, and Discord onto Cloudflare's edge:
+> **always-on, no laptop, a stable URL, and horizontal scale** for the live-stream phase that follows.
+> The current "External API access" tunnel above is the bridge; this is the destination.
+>
+> Grounded against current Cloudflare docs (via the `cloudflare` skill + a `cloudflare-deployment-expert`
+> pass) — feasibility verdicts and the limits to **verify early** are called out inline.
+
+### What runs where — local → Cloudflare mapping
+
+| Today (local) | Cloudflare primitive | Notes |
+|---|---|---|
+| ZeroClaw Rust daemon — HTTP gateway | **Worker** (+ **Agents SDK**) | `/webhook`, `/generate`, `/render`, `/health`; the agent loop |
+| Per-session "modify" state + version history | **Durable Object** (Agents SDK `setState`) | one DO per `session_id` = the modify chain, SQLite-backed |
+| LLM compose (OpenAI gpt-5.4) | **`fetch()` → OpenAI** behind **AI Gateway** | stays external (Workers AI has no gpt-5.4 peer); AI Gateway adds caching + rate-limit + cost observability at ~0 added latency |
+| Headless-Chromium render + ffmpeg | **Containers** (`standard-2`/`-3`) | **the crux** — see below; Browser Rendering is NOT viable for audio |
+| Render dispatch | **Queues** | Worker enqueues a job → Container consumer renders → R2 |
+| Supabase Postgres `tracks` | **D1** | 10 GB cap → ship a retention cron in the same PR |
+| Supabase storage (WAVs) | **R2** | zero egress on every serving path |
+| pgvector "more like this" | **Vectorize** | ANN-only; keep metadata in D1, join app-side |
+| Local cron (trending / jingles) | **Cron Triggers** | sub-hourly cron has a 30 s CPU cap → it must *enqueue*, not render inline |
+| Ephemeral quick tunnel | **Workers route / custom domain** | stable public URL; tunnel retired |
+
+### Diagram (target)
+
+```
+                                ┌──────────────── Cloudflare edge ─────────────────┐
+ Discord ──Interactions POST──► │  Worker  (gateway + Agents SDK orchestrator)      │
+ Frontend ──/generate /render─► │   defer<3s → waitUntil(compose → enqueue render)  │
+                                │        │                    ▲ follow-up REST       │
+                                │        ▼                    │                      │
+                                │   Durable Object            │                      │
+                                │   (per session: modify      │                      │
+                                │    chain, version history)  │                      │
+                                │        │ enqueue                                    │
+                                │        ▼                                            │
+                                │     Queues ──► Container (Node+Playwright+Chromium  │
+                                │                  @strudel/web → WAV → ffmpeg)       │
+                                │                        │                           │
+                                │   D1 ◄─ row   Vectorize ◄─ embedding   R2 ◄─ audio │
+                                └────────────────────────────────────────────────────┘
+   external (UDP blocker):  ▸ optional Discord *voice-channel* relay lives OFF Cloudflare
+```
+
+### The crux — render + transcode must run in a Container
+
+- **Browser Rendering is OUT.** The managed browser pool **doesn't allow custom Chromium flags**
+  (we rely on `--autoplay-policy`-class control), exposes **no audio-device path**, and has **no way to
+  exfiltrate a generated Blob/WAV** back to the caller — so the existing `download`-event WAV-capture
+  trick has no equivalent. **Don't prototype this path.**
+- **Containers are the home (GA on Workers Paid).** A `linux/amd64` image runs the *existing* renderer
+  unchanged — Node + Playwright + Chromium + **ffmpeg as a real binary** — owning its own filesystem for
+  the WAV→Opus/HLS handoff. Size at **`standard-2` (1 vCPU / 6 GiB)** minimum, **`standard-3`
+  (2 vCPU / 8 GiB)** for headroom. An ~8 s `OfflineAudioContext` render is trivially within CPU budget.
+- **ffmpeg → Containers only.** WASM-ffmpeg in a Worker is a dead end (128 MiB isolate memory, 64 MB
+  bundle cap, no threads) — OK for a toy clip, OOMs on real audio + HLS segmenting. The Sandbox SDK is
+  Containers with extra multi-tenant overhead we don't need.
+- ⚠ **Verify early:** container **cold provisioning takes minutes**; measure warm-start latency for
+  Chromium init at the chosen `sleepAfter` and keep a warm instance for the demo. Keep the existing
+  **timeout + K=2 retry** wrapper (renders flake / cold-start) — `agent-reliability`.
+
+### Discord on Cloudflare
+
+- **Interactions webhook → Worker is the clean native path.** Discord POSTs a signed request; the
+  Worker verifies the Ed25519 signature, **acks within 3 s with a deferred response (type 5)**, then
+  `waitUntil()` runs compose → render → **follow-up via the Discord REST webhook** (posts the 🎙️ voice
+  message exactly like today's `discord-voice.sh` 3-step flow). This **retires the REST-poll
+  `strudel-watch.py` watcher** — event-driven, no polling.
+- A persistent **Gateway WebSocket in a DO is fragile** (15-min outbound-connection eviction → a
+  reconnect/RESUME dance); only worth it if we need true gateway events. Default to Interactions.
+- ⚠ **Discord *voice-channel* streaming is a hard blocker on Cloudflare** — Discord Voice needs a **UDP**
+  socket for Opus RTP and **Workers/DOs have no UDP**. The "Riff is always playing in the voice channel"
+  idea (and Phase 4's voice radio) needs an **external relay** (a small Container *outside* CF, or a VPS)
+  that pulls the stream and pushes Opus frames. Budget for it; don't assume CF can do it.
+
+### Persistence — the swaps and their gotchas
+
+| Swap | Limit to design around |
+|---|---|
+| Postgres → **D1** | 10 GB/DB, 100 cols/table, 2 MB/row — **add a retention cron from day one** (`rules/cloudflare-lessons.md`) |
+| Storage → **R2** | zero egress everywhere; ~$4.50/M writes, $0.36/M reads — batch where possible |
+| pgvector → **Vectorize** | 1,536-dim max (matches OpenAI `text-embedding-3-small`), 10 M vectors/index, **ANN-only (no SQL predicates)** → upsert vectors to Vectorize, keep structured metadata in D1, join the two app-side (a 2-hop "more like this") |
+| cron → **Cron Triggers** | ~1-min min interval; **sub-hourly cron = 30 s CPU cap** → the trigger must *enqueue to Queues* and return, never render inline |
+| render queue → **Queues** | 5,000 msg/s, 128 KB/msg, 15-min consumer wall-clock, 100 retries |
+
+### Phasing (thin vertical slices)
+
+- **P0 — Worker shell.** Port `/generate` + `/render` (the stdlib `api-server.py` logic) to a Worker that
+  calls OpenAI via `fetch` and returns code + `share_url`; **no render yet** (Tier-A link only). Stable
+  custom-domain URL replaces the quick tunnel. *Proves the orchestrator runs on the edge.*
+- **P1 — Containerized render.** Wrap the existing `render/` engine + ffmpeg in a Container image;
+  Worker → Queues → Container → R2; `/render` now returns a real `audio_url`. *Proves audio renders off-laptop.*
+- **P2 — State + persistence.** Per-session DO (Agents SDK) for the modify chain; `tracks` in D1;
+  embeddings in Vectorize; "more like this" working. *Proves the modify loop + history on the edge.*
+- **P3 — Discord-native.** Interactions webhook replaces the daemon + watcher; @mention → deferred ack →
+  follow-up voice message, fully on Cloudflare. *Laptop fully retired.*
+
+⚠ **Agents SDK GA status is unconfirmed in current docs** — treat as recently-launched; if it's still
+beta when we build, fall back to **raw Durable Objects** (the SDK is a convenience layer over them —
+`schedule()`/`scheduleEvery()`, `setState()`, durable execution — not a hard dependency).
+
+---
+
+## Phase 4 — Constant live stream (generative radio): Riff never stops
+
+> **The idea.** Beyond request→response, Riff runs an **always-on radio station** — one stream URL that
+> plays an **endless, continuously-composed, evolving set**. No track repeats; the music morphs over
+> time (gradually shifting genre / mood / energy), seeded by time-of-day, channel mood (Situation D), or
+> what's trending — and the community can **steer it live** ("make it darker", "more energy"). This is the
+> marquee *"it's genuinely generative, not a playlist"* demo.
+
+### How "continuous" works — a lookahead buffer
+
+The core trick is a **lookahead buffer**: the coordinator always keeps the stream a few segments *ahead*
+of the playhead, so there is always music ready while the next chunk generates.
+
+```
+ playhead ───────────────────────────────────────────────►  t
+ [seg n-2][seg n-1][ seg n ]│[seg n+1][seg n+2]              in R2 + in the rolling .m3u8
+   (played → evicted)        │ ▲ now playing  ▲ buffered ahead
+                             │
+        DJ coordinator ──────┘ generates seg n+3 NOW (SongSpec evolved from seg n+2)
+                               → render (Container) → HLS segment → R2 → append to .m3u8
+```
+
+- Each new segment's **SongSpec is derived from the previous** by an *evolution engine* — a transition
+  model (Markov / rule-based) over the **modify vocabulary** (see the modification table above): nudge
+  BPM ±, shift a scale, add/drop a layer, swap a kit. Keep **key + tempo coherent** across adjacent
+  segments so joins are seamless **harmonic mixes**, with a short crossfade (ffmpeg `acrossfade`) at each
+  boundary — Phase-2 Tier-B assembly, but unbounded and real-time.
+- **Steering:** `POST /steer {"nudge":"darker"}` (or a Discord command) biases the next few SongSpecs —
+  the stream reacts within a segment or two without breaking continuity.
+
+### Architecture (built on Phase 3's primitives)
+
+| Role | Primitive | What it does |
+|---|---|---|
+| **DJ coordinator** | **Durable Object** (Agents SDK `scheduleEvery`) | the brains: rolling segment window (DO SQLite), schedules the next generation, derives the next SongSpec, maintains the `.m3u8` |
+| Generate + render | **Queues → Container** | compose Strudel → render WAV → ffmpeg → **HLS segment** (`.ts`/fMP4, ~6–10 s) |
+| Segment + playlist store | **R2** | rolling window of segments + the live `.m3u8`; old segments evicted |
+| Serve to listeners | **Worker** | reads playlist/segments from R2, **short edge-cache TTL** (`cf.cacheTtl ≈ segment length`) → thousands of listeners served from cache at ~zero cost |
+| Listen surface | **HLS** (`.m3u8`) | any browser/player; embed in the dashboard with an `<audio>` + hls.js player |
+
+### Why rolling-HLS (not Cloudflare Stream / Icecast)
+
+- **No Cloudflare-native Icecast equivalent.** Cloudflare **Stream is video-centric and billed per
+  delivered minute** — far too expensive for 24/7 audio. **Rolling HLS segments to R2, served by a
+  Worker, is the correct self-managed path** (R2 egress is free; the edge cache absorbs listener fan-out).
+- Standard HLS latency (~3 segments behind live) is **fine for radio** — it isn't interactive, so skip
+  LL-HLS complexity. Tune segment length for the latency/overhead tradeoff (~6–10 s).
+
+### Reliability — *dead-air protection is the whole game*
+
+A radio that goes silent is broken. Apply the `agent-reliability` discipline to a real-time deadline:
+- **Never let the buffer underrun.** Generation must stay ahead by ≥2 segments. **K=2 retry + timeout**
+  on every compose+render.
+- **Fallback ladder on a failed/late segment:** (1) **re-loop / extend the previous segment** (already
+  key/tempo-coherent), (2) drop to a **cached evergreen loop** in R2, (3) only then a brief tasteful fill.
+  The listener hears audibly-fine degradation, **never dead air**.
+- ⚠ **Verify early:** DO **alarms are best-effort, not a real-time clock** — at sub-15 s cadence there can
+  be jitter. Because generation runs *ahead* of playback, modest jitter is absorbed by the buffer; but if
+  timing proves too loose, **move the coordinator into a persistent Container process** (a real event
+  loop) and keep the DO only for coordination state. R2 same-key write rate is **1/s** — rewriting the
+  `.m3u8` every ~8 s is comfortably safe.
+
+### Discord radio (stretch)
+
+A Discord **voice-channel** "always-on Riff" is desirable but hits the **UDP blocker** (Phase 3): the
+relay that pushes Opus frames into the voice channel must run **off Cloudflare** (a small box that
+consumes the HLS stream). The HLS URL is the primary listen surface; the voice-channel relay is a stretch.
+
+### Phasing
+
+- **P0 — Local-first prototype** (ship the simple thing first, per the Sundai ethos). The render pipeline
+  already exists — build the **continuous generator + HLS segmenter locally**, write segments to a folder,
+  serve the `.m3u8` through the existing tunnel. Proves "endless evolving audio" with zero new infra.
+- **P1 — Evolution engine.** The SongSpec transition model so the stream *morphs* (not random jumps);
+  seamless harmonic-mix crossfades at segment joins.
+- **P2 — Lift to Cloudflare.** DJ coordinator → DO / Agents `scheduleEvery`; render → Queues + Container;
+  segments + playlist → R2; serve via Worker with short cache TTL. Always-on, no laptop, scales.
+- **P3 — Steering + seeds.** `POST /steer` + a Discord command; seed from time-of-day / channel mood
+  (Situation D) / trending. **Stretch:** off-Cloudflare relay into a Discord voice channel.
+
+---
+
 ## Build log
 *Running record of what's shipped, newest first. Updated each work iteration.*
 
+- **Jun 22 — Offline render hardening: vendored the `@strudel/web` bundle (killed the esm.sh CDN dependency).** `render/render.html` loaded the Strudel browser bundle from **esm.sh** — the one *hard* network dependency at render time (sample fetches are soft/caught, but a bundle-load failure blanks the *whole* render), and the roadmap's stated **#1 demo-reliability TODO** (render finding #5). Fix: import from `./node_modules/@strudel/web/dist/index.mjs`, served same-origin by the renderer's existing local static server (`node_modules` is gitignored and `setup.sh` already `npm install`s it → no AGPL bundle committed into this MIT repo, no repo bloat). Verified the dist bundle is self-contained (vite inlines the audio worklets; the only external asset, the clock worker, resolves relative to the bundle URL under `dist/assets/` — also served locally). Added an env-gated test hook **`STRUDEL_BLOCK_EXTERNAL=1`** in `render/strudel-render.mjs` (Playwright `page.route('**')` aborts every non-localhost request) so offline-readiness is verifiable + can join the doctor. **Tested:** (a) normal synth+909 render → 1.4 MB WAV, all sample packs load; (b) **fully network-blocked** synth render → 1.5 MB / **8.7 s real audio** (256-pt waveform, not silence) *while the dirt-samples CDN fetch was provably aborted* — proving the bundle is 100% local. **Remaining for full offline:** drum/sample **WAVs** still fetch lazily from `raw.githubusercontent.com`, so sampled patterns still need the network — vendoring those is the next step. (Diff independently reviewed via vibe-orchestrator.)
+- **Jun 22 — Roadmap: added Phase 3 (Cloudflare migration) + Phase 4 (continuous live stream).** Two new sections, grounded against current Cloudflare docs (via the `cloudflare` skill + a `cloudflare-deployment-expert` pass). **Phase 3 — off the laptop:** maps the local stack to the edge — **Worker** (+ Agents SDK) for the gateway/orchestrator, a per-session **Durable Object** for the modify chain, **Containers** for the headless-Chromium render + ffmpeg (**Browser Rendering is NOT viable for audio** — no custom flags / no audio device / no Blob exfil), **Queues** for render dispatch, Supabase → **D1/R2/Vectorize**, cron → **Cron Triggers**, OpenAI behind **AI Gateway**; Discord via the **Interactions webhook** (defer<3s → `waitUntil` → follow-up REST, retiring the poll-watcher). Hard blockers flagged: container cold-start, **Discord voice = UDP = impossible on CF** (needs an external relay), D1 10 GB cap (retention cron), Agents SDK GA unconfirmed. **Phase 4 — generative radio:** an always-on, continuously-composed, evolving stream via a **lookahead buffer** — a DJ Durable Object (`scheduleEvery`) derives each next SongSpec from the last (evolution engine over the modify vocab, key/tempo-coherent crossfades), renders HLS segments to **R2**, a Worker serves the rolling `.m3u8` with a short edge-cache TTL (rolling-HLS, not the video-centric Cloudflare Stream). **Dead-air protection** (K=2 + fallback ladder: re-loop → evergreen → fill) is the reliability spine. Local-first P0, then lift to CF. Design only — not built.
 - **Jun 21 — Verified song composition from a PROMPT (Phase-2 Tier-A, agent level).** Asked the live gpt-5.4 agent for "a full song — intro/verse/chorus/outro — chill house"; it composed a valid 30-line `arrange()` program (`const` sections, correct `.swing(4)`), auto-sized to 24 cycles → **rendered the full ~47 s** song, mean −18.5 dB. So the marquee song feature works prompt→audio, and the soul's existing "Songs" directive drives it correctly (no edit needed). Also confirmed **delivery**: a 48 s song through `strudel-deliver.sh` → a **233 KB Opus/OGG** voice-message payload (well within Discord limits; the soul correctly omits the >2000-char play-link for songs). Pairs with the vocals verification below — both Phase-2 capabilities now confirmed end-to-end.
 - **Jun 21 — Verified the two marquee features end-to-end (roadmap).** **(a) Vocals:** `render/voice-deliver.sh` → beat render + **OpenAI TTS** ("ash") of a line → `voice-mix.sh` over the beat → 6 s ogg. Works (`--say` verbatim; `--auto` authors a hook via gpt-5.4-mini). **(b) Phase-2 Tier-A song:** a 4-section `arrange([4,intro],[8,verse],[8,chorus],[4,outro])` auto-sized by `strudel-cycles.sh` to 24 cycles → **rendered the full 48 s** (not cut to the intro), mean −17.7 dB. So the render+deliver pipeline already supports both songs and vocals; the open part is the **agent composing** them (soul directives), which is your in-flight work. README "From a loop to a song" now shows both as copy-paste verified examples.
 - **Jun 21 — Pitch deck (`docs/slides.html`).** A self-contained 8-slide deck for the presentation, styled as the Strudel live-coding console (monospace display, `▸` prompt chrome, syntax-highlit code, a generated waveform hero — amber/magenta on dark indigo). Slides: title → the black-box problem → what it does (3-part reply + real code) → the local pipeline → loop→song + the measured section arc → **our process** (soul → gate → model fallback → render → ship) → resilient-by-design → try-it/close. No external assets (CSP-safe); arrow/space nav. Linked from the README; published as a Claude artifact. **PDF fallback** for offline presenting at `docs/slides.pdf` — `scripts/slides-to-pdf.mjs` renders it via the installed headless Chromium (print-CSS paginates one slide per page, dark background preserved; 8 pages).

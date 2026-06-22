@@ -8,7 +8,13 @@
 // We use the official `renderPatternAudio`, which renders the pattern through an
 // OfflineAudioContext (faster-than-realtime, deterministic) and emits a WAV via a
 // blob <a download> click — the Playwright driver captures that download.
-import { initStrudel, evaluate, renderPatternAudio, samples } from 'https://esm.sh/@strudel/web@1.3.0';
+// Vendored locally (was: https://esm.sh/@strudel/web@1.3.0). The bundle is served
+// same-origin by strudel-render.mjs's static server out of node_modules (populated by
+// `npm install` here — setup.sh does this). This removes the ONLY hard network dependency
+// at render time: a CDN/network blip can no longer blank the whole render. The bundle is
+// self-contained (vite inlines the audio worklets); its one external asset — the clock
+// worker — resolves relative to this file's URL at dist/assets/, also served locally.
+import { initStrudel, evaluate, renderPatternAudio, samples } from './node_modules/@strudel/web/dist/index.mjs';
 
 window.__strudelReady = (async () => {
   // initStrudel wires up the global pattern scope (note, sound, n, stack, scale, …),

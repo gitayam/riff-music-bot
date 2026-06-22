@@ -83,6 +83,17 @@ async function main() {
   try {
     const ctx = await browser.newContext({ acceptDownloads: true });
     const page = await ctx.newPage();
+    // Offline-reliability test hook: STRUDEL_BLOCK_EXTERNAL=1 aborts every non-localhost
+    // request, proving the render needs no CDN (the @strudel/web bundle is now served
+    // locally). A synth-only pattern renders fully under this; cross-origin sample-pack
+    // fetches will (soft-)fail by design. Off for normal renders. Used by the offline smoke.
+    if (process.env.STRUDEL_BLOCK_EXTERNAL === '1') {
+      await page.route('**', (route) => {
+        const host = new URL(route.request().url()).hostname;
+        if (host === '127.0.0.1' || host === 'localhost') route.continue();
+        else route.abort();
+      });
+    }
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(String(e)));
     page.on('console', (m) => { if (m.type() === 'error') pageErrors.push('console: ' + m.text()); });
