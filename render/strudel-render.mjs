@@ -59,7 +59,14 @@ function serve(root) {
   const types = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript', '.json': 'application/json' };
   return new Promise((resolve) => {
     const srv = http.createServer((req, res) => {
-      const p = path.join(root, decodeURIComponent(req.url.split('?')[0]));
+      let p = path.join(root, decodeURIComponent(req.url.split('?')[0]));
+      // Offline sample cache: serve the cache-local maps (local _base) in place of the
+      // remote-pointing vendored maps when cache-samples.mjs has populated samples-cache/.
+      const base = path.basename(p);
+      if (base === 'tidal-drum-machines.json' || base === 'piano.json') {
+        const cached = path.join(root, 'samples-cache', base);
+        if (fs.existsSync(cached)) p = cached;
+      }
       if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); res.end(); return; }
       res.writeHead(200, { 'Content-Type': types[path.extname(p)] || 'application/octet-stream' });
       fs.createReadStream(p).pipe(res);

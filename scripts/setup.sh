@@ -16,17 +16,21 @@ command -v zeroclaw >/dev/null \
   && echo "  ✓ zeroclaw ($(zeroclaw --version 2>/dev/null | head -1))" \
   || echo "  • zeroclaw not on PATH — it's the runtime; install from https://github.com/zeroclaw-labs/zeroclaw"
 
-echo "▶ 2/5 faithful-render deps (render/)"
+echo "▶ 2/6 faithful-render deps (render/)"
 ( cd render && npm install --no-audit --no-fund >/dev/null 2>&1 ) && echo "  ✓ render/node_modules" || { echo "  ✗ npm install failed in render/"; miss=1; }
 
-echo "▶ 3/5 parse-gate deps (scripts/render/)"
+echo "▶ 3/6 parse-gate deps (scripts/render/)"
 ( cd scripts/render && npm install --no-audit --no-fund >/dev/null 2>&1 ) && echo "  ✓ scripts/render/node_modules" || { echo "  ✗ npm install failed in scripts/render/"; miss=1; }
 
-echo "▶ 4/5 headless Chromium (Playwright)"
+echo "▶ 4/6 headless Chromium (Playwright)"
 ( cd render && npx --yes playwright install chromium >/dev/null 2>&1 ) && echo "  ✓ chromium" \
   || echo "  • run manually: (cd render && npx playwright install chromium)"
 
-echo "▶ 5/5 .env"
+echo "▶ 5/6 offline sample cache (909/808/piano → render/samples-cache/)"
+( cd render && node cache-samples.mjs >/dev/null 2>&1 ) && echo "  ✓ sample cache ready (drums render offline)" \
+  || echo "  • sample cache incomplete (network?) — rerun: (cd render && node cache-samples.mjs); renders still work online"
+
+echo "▶ 6/6 .env"
 if [ -f .env ]; then echo "  ✓ .env exists (leaving it)"
 else cp .env.example .env && echo "  ✓ created .env from .env.example — FILL IN your keys"; fi
 

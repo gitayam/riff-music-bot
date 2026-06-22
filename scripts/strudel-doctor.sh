@@ -76,6 +76,24 @@ if [ -d "$root/render/node_modules" ]; then
   rm -f "$_off"
 else meh "skipped offline render check (render/ deps missing)"; fi
 
+echo "── offline drums (sample cache: 909/808/piano render with the network blocked)"
+# WAV size doesn't distinguish silence (uncompressed PCM), so assert a real waveform peak:
+# if the cached _base didn't resolve, the drums are silent and peak stays near 0.
+if [ -d "$root/render/samples-cache" ]; then
+  _d=/tmp/_doc_drums.wav; rm -f "$_d"
+  if printf '%s' 'stack(sound("bd*4").bank("RolandTR909").gain(0.9), sound("hh*8").bank("RolandTR909").gain(0.4))' \
+       | STRUDEL_BLOCK_EXTERNAL=1 timeout 150 node "$root/render/strudel-render.mjs" "$_d" 2 >/dev/null 2>&1 \
+     && peak=$(node "$root/render/strudel-waveform.mjs" "$_d" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const b=Buffer.from(JSON.parse(s).waveform_b64,"base64");let m=0;for(const v of b)m=v>m?v:m;console.log(m)}catch{console.log(0)}})') \
+     && [ "${peak:-0}" -gt 60 ]; then
+    ok "909/808 drums render offline from cache (peak ${peak}/255)"
+  else
+    no "offline drum render silent/failed → run '(cd render && node cache-samples.mjs)' (or the cached _base broke)"
+  fi
+  rm -f "$_d"
+else
+  meh "no sample cache → drums still need network. Run: (cd render && node cache-samples.mjs) for offline drums"
+fi
+
 echo "── full chain smoke test (gate → faithful render → ogg → waveform; ~15s, posts nothing)"
 if [ -d "$root/render/node_modules" ] && command -v ffmpeg >/dev/null; then
   smoke='setcpm(120/4)

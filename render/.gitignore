@@ -1,2 +1,4 @@
 # Node deps for the local Strudel renderer (run `npm install` here).
 node_modules/
+# Cached sample packs for offline rendering (run `node cache-samples.mjs`).
+samples-cache/
