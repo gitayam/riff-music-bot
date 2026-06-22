@@ -13,6 +13,8 @@ OPENAI_MODEL = "gpt-5.4"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 RETENTION_DAYS = "30"   # tracks older than this are pruned by the daily cron (D1 10 GB cap)
 DISCORD_API_BASE = "https://discord.com/api/v10"   # interaction follow-ups (PATCH @original)
+# PUBLIC_BASE_URL = "https://music.example.com"     # the Worker's own origin; lets the Discord path
+#   record an absolute audio_url in history (the rendered mp3 is attached to the message regardless).
 # RENDER_SERVICE_URL: the render Container's URL (container/). When set + AUDIO bound, /render (and
 # /generate|/modify with render:true) render real audio → R2 → served at /audio/<key>. Unset = Tier-A
 # (code + link only). Set as a var or, with a Container binding, point at the bound service URL.

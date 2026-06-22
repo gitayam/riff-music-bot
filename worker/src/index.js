@@ -116,13 +116,11 @@ function sessionStub(env, sessionId) {
   return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId));
 }
 
-// P1 last mile: render the code to audio via the render service (a Container in prod; a node process
-// locally) and store it in R2, returning a served audio_url. BEST-EFFORT — you always get the code +
-// share link; the rendered audio is a bonus, so any failure degrades to {render_error}, never throws.
-// Returns {} when rendering isn't wanted/configured (Tier-A), {audio_url} on success, {render_error} on failure.
-async function tryRender(env, { code, cycles, format, id, requestUrl, want }) {
-  if (!want) return {};
-  if (!env.RENDER_SERVICE_URL || !env.AUDIO) return {}; // not wired (Tier-A) — no error, just no audio
+// Render code → audio bytes via the render service (a Container in prod; a node process locally).
+// Returns {bytes, fmt} on success, or {error} — never throws. Shared by the HTTP API (tryRender,
+// which stores to R2) and the Discord follow-up (which attaches the bytes to the message).
+async function renderBytes(env, code, cycles, format) {
+  if (!env.RENDER_SERVICE_URL) return { error: "render service not configured" };
   const fmt = audioFormat(format);
   try {
     const r = await fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, {
@@ -131,11 +129,25 @@ async function tryRender(env, { code, cycles, format, id, requestUrl, want }) {
       body: JSON.stringify({ code, cycles, format: fmt }),
       signal: AbortSignal.timeout(60000),
     });
-    if (!r.ok) return { render_error: `render service returned ${r.status}` };
+    if (!r.ok) return { error: `render service returned ${r.status}` };
     const bytes = new Uint8Array(await r.arrayBuffer());
-    if (bytes.length === 0) return { render_error: "render service returned empty audio" };
-    const key = audioKey(id, fmt);
-    await env.AUDIO.put(key, bytes, { httpMetadata: { contentType: audioContentType(fmt) } });
+    if (bytes.length === 0) return { error: "render service returned empty audio" };
+    return { bytes, fmt };
+  } catch (e) {
+    return { error: String(e.message || e).slice(0, 150) };
+  }
+}
+
+// P1 last mile for the HTTP API: render → store in R2 → served audio_url. BEST-EFFORT — you always get
+// the code + share link; any failure degrades to {render_error}, never throws. {} when not wanted/wired.
+async function tryRender(env, { code, cycles, format, id, requestUrl, want }) {
+  if (!want) return {};
+  if (!env.RENDER_SERVICE_URL || !env.AUDIO) return {}; // not wired (Tier-A) — no error, just no audio
+  const out = await renderBytes(env, code, cycles, format);
+  if (out.error) return { render_error: out.error };
+  try {
+    const key = audioKey(id, out.fmt);
+    await env.AUDIO.put(key, out.bytes, { httpMetadata: { contentType: audioContentType(out.fmt) } });
     return { audio_url: audioUrlFor(requestUrl, key) };
   } catch (e) {
     return { render_error: String(e.message || e).slice(0, 150) };
@@ -266,29 +278,61 @@ async function handleDiscordInteraction(request, env, ctx) {
   return json(200, { type: T.PONG }); // unknown type → harmless ack
 }
 
-// Runs after the deferred ack: compose Strudel, persist, and edit the @original message.
+// Edit the deferred @original message — with the rendered audio attached (multipart) when we have it,
+// else plain text. Discord plays an mp3 attachment inline, so this is "real audio in Discord".
+async function patchFollowup(url, content, audio) {
+  let init;
+  if (audio) {
+    const form = new FormData();
+    form.append("payload_json", JSON.stringify({ content, attachments: [{ id: 0, filename: "riff.mp3" }] }));
+    form.append("files[0]", new Blob([audio], { type: "audio/mpeg" }), "riff.mp3");
+    init = { method: "PATCH", body: form }; // fetch sets multipart Content-Type + boundary
+  } else {
+    init = { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) };
+  }
+  await fetch(url, init);
+}
+
+// Runs after the deferred ack: compose Strudel, render audio (best-effort), persist, and edit the message.
 async function composeAndFollowup(env, interaction) {
   const url = followupUrl(env.DISCORD_API_BASE, interaction.application_id, interaction.token);
   const prompt = commandPrompt(interaction);
-  let content;
+  let content, audio = null;
   try {
     if (!prompt) {
       content = "Give me something to make — e.g. `/riff prompt: funky disco loop, 120bpm`.";
     } else {
       const code = await composeValid(env, prompt, 2);
       const share = shareUrl(code);
+      // Render the audio for Discord (best-effort — degrade to code+link if it fails/unconfigured).
+      const id = newId();
+      const r = await renderBytes(env, code, 4, "mp3");
+      let audio_url = null;
+      if (r.bytes) {
+        audio = r.bytes;
+        if (env.AUDIO) {
+          try {
+            const key = audioKey(id, "mp3");
+            await env.AUDIO.put(key, r.bytes, { httpMetadata: { contentType: "audio/mpeg" } });
+            // Absolute audio_url needs the Worker's public origin (no request.url in this async ctx);
+            // set PUBLIC_BASE_URL to record it in history. The Discord attachment carries the audio regardless.
+            if (env.PUBLIC_BASE_URL) audio_url = `${env.PUBLIC_BASE_URL.replace(/\/+$/, "")}/audio/${key}`;
+          } catch { /* R2 optional for Discord — the attachment still carries the audio */ }
+        }
+      }
       // Best-effort history (source 'discord'); never block the reply on persistence.
       await insertTrack(env, buildTrackRow({
         session_id: interactionSessionId(interaction), prompt, source: "discord",
-        strudel_code: code, share_url: share, version: 1,
-      }, newId()));
+        strudel_code: code, share_url: share, audio_url, version: 1,
+      }, id));
       content = followupContent(prompt, code, share);
     }
   } catch (e) {
     content = `Couldn't compose that: ${String(e.message || e).slice(0, 150)}`;
+    audio = null;
   }
   try {
-    await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) });
+    await patchFollowup(url, content, audio);
   } catch (e) {
     console.log("discord followup failed:", e.message);
   }

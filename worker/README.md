@@ -32,8 +32,9 @@ not configured · `504` LLM timeout.
 REST-poll `strudel-watch.py` watcher. Discord signs each request (Ed25519); the Worker verifies it with the
 app's public key (`DISCORD_PUBLIC_KEY`), answers the PING handshake, and for a slash command **acks within
 3 s with a deferred response** then composes the Strudel in `waitUntil()` and **edits the original message**
-(via the interaction token — no bot token needed) with the code + `strudel.cc` link. After deploy, set the
-app's *Interactions Endpoint URL* to `https://<worker>/discord/interactions`.
+(via the interaction token — no bot token needed). When the render service is wired it **renders the audio
+and attaches the mp3** to the message (plays inline in Discord); otherwise it degrades to code + `strudel.cc`
+link. After deploy, set the app's *Interactions Endpoint URL* to `https://<worker>/discord/interactions`.
 
 **Rendered audio (P1 last mile):** set `RENDER_SERVICE_URL` to the render Container (`../container/`) and
 bind the `AUDIO` R2 bucket, and the Worker renders real audio: `/render` (and `/generate`/`/modify` with
@@ -84,8 +85,8 @@ Gateway** in prod for caching + rate-limit + cost observability) are non-secret 
   service as a node process, local R2). In prod the render service is a CF **Container** (`../container/`)
   and, for scale, a **Queue** decouples the render from the 3 s response. Building the image needs a Docker
   daemon; the Container/Queue bindings need a Workers Paid account.
-- **Attaching rendered audio to the Discord follow-up.** P3 posts code + a play link; wiring `render:true`
-  into the Discord follow-up (multipart upload of the rendered file) is the next P3 step.
+- **Native Discord voice-message bubble.** The Discord follow-up attaches the mp3 (plays inline); the
+  waveform/scrubber "voice message" bubble (flags 8192 + waveform + Opus/OGG) is a possible polish step.
 - **Registering the slash command** with Discord (one-time `PUT /applications/{id}/commands`) is an operator
   step, not code here — the webhook handler is built + tested.
 - **The authoritative `@strudel/transpiler` parse-gate** → P1 (ships with the Container). `validateStrudel()`

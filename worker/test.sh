@@ -31,11 +31,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # Branch on the request so /generate and /modify return DIFFERENT code → a meaningful diff to assert.
 BASE = 'setcpm(120/4)\nstack(sound("bd*4"))'
 MOD  = 'setcpm(120/4)\nstack(sound("bd*4").bank("RolandTR909"))'
+FAIL = 'setcpm(120/4)\nstack(sound("BOOMFAIL"))'   # passes validation but the render mock 500s on it
 class H(BaseHTTPRequestHandler):
     def log_message(self,*a): pass
     def do_POST(self):
         n=int(self.headers.get("Content-Length","0")); req=self.rfile.read(n).decode("utf8","ignore")
-        code = MOD if "Apply this change" in req else BASE   # modifyUserContent contains "Apply this change"
+        code = MOD if "Apply this change" in req else (FAIL if "FAILME" in req else BASE)
         body=json.dumps({"choices":[{"message":{"content":f"Here you go:\n```javascript\n{code}\n```"}}]}).encode()
         self.send_response(200); self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
@@ -247,10 +248,17 @@ nc=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/discord/interactions"
 dsend '{"type":2,"application_id":"app1","token":"tok1","channel_id":"c9","data":{"name":"riff","options":[{"name":"prompt","value":"funky disco loop"}]}}'
 { [ "$CODE" = 200 ] && printf '%s' "$RESP" | grep -qF '"type":5'; } && ok "Discord slash command → deferred ack (type 5)" || bad "discord command ack (code=$CODE)"
 
-# the deferred follow-up runs async (waitUntil): poll the mock Discord for the PATCH with the play link
+# the deferred follow-up runs async (waitUntil): the render service is wired, so it should ATTACH the
+# rendered audio (riff.mp3, multipart) AND carry the play link in payload_json.
 EXPECT_LINK="https://strudel.cc/#c2V0Y3BtKDEyMC80KQpzdGFjayhzb3VuZCgiYmQqNCIpKQ=="
-got=""; for _ in $(seq 1 20); do grep -qF "$EXPECT_LINK" "$DLOG" 2>/dev/null && { got=1; break; }; sleep 0.5; done
-[ -n "$got" ] && ok "Discord follow-up posts code + ▶ play link (waitUntil)" || bad "discord followup not received"
+got=""; for _ in $(seq 1 20); do { grep -qF "riff.mp3" "$DLOG" && grep -qF "$EXPECT_LINK" "$DLOG"; } 2>/dev/null && { got=1; break; }; sleep 0.5; done
+[ -n "$got" ] && ok "Discord follow-up attaches rendered audio (riff.mp3) + link" || bad "discord audio follow-up not received"
+
+# render-failure degrade: a prompt whose code won't render → text-only follow-up (link, no attachment)
+: > "$DLOG"
+dsend '{"type":2,"application_id":"app2","token":"tok2","channel_id":"c9","data":{"name":"riff","options":[{"name":"prompt","value":"FAILME please"}]}}'
+got=""; for _ in $(seq 1 20); do grep -qF "strudel.cc/#" "$DLOG" 2>/dev/null && { got=1; break; }; sleep 0.5; done
+{ [ -n "$got" ] && ! grep -qF "riff.mp3" "$DLOG"; } && ok "Discord render-failure → text follow-up (link, no attachment)" || bad "discord degrade (got=$got)"
 rm -f /tmp/worker-resp.$$
 
 echo
