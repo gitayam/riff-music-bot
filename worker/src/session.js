@@ -12,8 +12,9 @@ export class Session extends DurableObject {
     return (await this.ctx.storage.get("versions")) || [];
   }
 
-  // Append a new version; returns its 1-based version number.
-  async append({ code, share_url, source, instruction }) {
+  // Append a new version; returns its 1-based version number. track_id is the D1 row id (so a later
+  // /modify can link the new D1 row's parent_id to the row it edited).
+  async append({ code, share_url, source, instruction, track_id }) {
     const versions = await this._versions();
     const version = versions.length + 1;
     versions.push({
@@ -22,6 +23,7 @@ export class Session extends DurableObject {
       share_url,
       source: source || "generate",
       instruction: instruction ?? null,
+      track_id: track_id ?? null,
     });
     await this.ctx.storage.put("versions", versions);
     return version;

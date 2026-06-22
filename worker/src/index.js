@@ -1,24 +1,26 @@
-// index.js — Riff music API as a Cloudflare Worker (Phase 3 P0: "Worker shell").
+// index.js — Riff music API as a Cloudflare Worker (Phase 3 P0 + P2: edge orchestrator, Tier-A).
 //
-// Ports the request/response surface of scripts/api-server.py to the edge, Tier-A only:
-// prompt → gpt-5.4 (via fetch) → valid Strudel → strudel.cc share link. NO audio render yet —
-// that needs a Container (Phase 3 P1), so audio_url is always null here. This proves the
-// orchestrator runs off-laptop on a stable URL; render is the next vertical slice.
+// Ports scripts/api-server.py to the edge: prompt → gpt-5.4 (via fetch) → valid Strudel → strudel.cc
+// link, with a per-session modify chain (Durable Object) and cross-session history (D1). NO audio
+// render yet — that needs a Container (Phase 3 P1), so audio_url is always null here.
 //
-//   GET  /health            → {ok:true}
-//   GET  /                  → self-documenting capabilities
-//   POST /generate {prompt} → {prompt, strudel_code, share_url, audio_url:null, version, engine}
-//   POST /render   {code}   → same shape (skips the LLM; validates + links code you already have)
+//   GET  /health               → {ok:true}
+//   GET  /                      → self-documenting capabilities
+//   GET  /history?session_id=…  → {tracks:[…]}  (bearer-gated; cross-session history from D1)
+//   POST /generate {prompt}     → {prompt, strudel_code, share_url, audio_url:null, version, …}
+//   POST /modify {session_id, instruction} → {…, diff, version, parent_id}  (edits the last version)
+//   POST /render   {code}       → same shape (skips the LLM; validates + links code you already have)
 //
-// Auth: every POST needs `Authorization: Bearer <MUSIC_API_TOKEN>` (matches api-server.py).
-// Env: OPENAI_API_KEY (secret), MUSIC_API_TOKEN (secret), OPENAI_MODEL (var, default gpt-5.4),
-//      OPENAI_BASE_URL (var, default https://api.openai.com/v1 — point at an AI Gateway in prod).
+// Auth: every POST + /history needs `Authorization: Bearer <MUSIC_API_TOKEN>` (matches api-server.py).
+// Env: OPENAI_API_KEY (secret), MUSIC_API_TOKEN (secret), OPENAI_MODEL/OPENAI_BASE_URL/RETENTION_DAYS
+//      (vars); bindings SESSIONS (Durable Object), DB (D1). Daily Cron Trigger → scheduled() prunes D1.
 
 import {
   shareUrl, extractStrudel, validateStrudel, buildChatBody, repairPrompt,
   modifyUserContent, diffString,
 } from "./lib.js";
 import { Session } from "./session.js";
+import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec } from "./store.js";
 
 export { Session }; // the runtime needs the DO class exported from the entry module
 
@@ -134,7 +136,15 @@ async function handlePost(request, env, path) {
       if (!prev) return json(404, { error: "unknown session_id — call /generate with this session_id first" });
       const code = await composeValid(env, modifyUserContent(prev.code, req.instruction), req.repair_attempts);
       const share = shareUrl(code);
-      const version = await stub.append({ code, share_url: share, source: "modify", instruction: req.instruction });
+      // Persist FIRST (so the D1 row id can be stored in the DO version for parent-linking), then
+      // append to the DO. Both happen only after composeValid succeeded — an invalid modify (422)
+      // never advances the chain.
+      const trackId = newId();
+      await insertTrack(env, buildTrackRow({
+        session_id: req.session_id, instruction: req.instruction, source: "modify",
+        strudel_code: code, share_url: share, parent_id: prev.track_id ?? null, version: prev.version + 1,
+      }, trackId));
+      const version = await stub.append({ code, share_url: share, source: "modify", instruction: req.instruction, track_id: trackId });
       return json(200, {
         session_id: req.session_id,
         instruction: req.instruction,
@@ -162,12 +172,23 @@ async function handlePost(request, env, path) {
     }
     // Optionally start/extend a session so the result can be modified later.
     const share = shareUrl(code);
-    let version = 1, parent_id = null;
+    const source = path.slice(1); // "generate" | "render"
+    let version = 1, parent_id = null, parentTrackId = null;
     if (req.session_id && typeof req.session_id === "string") {
       const stub = sessionStub(env, req.session_id);
       const prev = await stub.latest();
       parent_id = prev ? prev.version : null;
-      version = await stub.append({ code, share_url: share, source: path.slice(1), instruction: null });
+      parentTrackId = prev ? prev.track_id ?? null : null;
+      version = (prev ? prev.version : 0) + 1;
+    }
+    // Persist to D1 (cross-session history), then record the D1 id in the session's modify chain.
+    const trackId = newId();
+    await insertTrack(env, buildTrackRow({
+      session_id: req.session_id ?? null, prompt: req.prompt ?? null, source,
+      strudel_code: code, share_url: share, parent_id: parentTrackId, version,
+    }, trackId));
+    if (req.session_id && typeof req.session_id === "string") {
+      await sessionStub(env, req.session_id).append({ code, share_url: share, source, instruction: null, track_id: trackId });
     }
     return json(200, {
       prompt: req.prompt ?? null,
@@ -191,17 +212,34 @@ export default {
 
     if (request.method === "GET") {
       if (pathname === "/health") return json(200, { ok: true });
+      if (pathname === "/history") {
+        // Exposes other sessions' content → bearer-gated like the POSTs.
+        const auth = request.headers.get("Authorization") || "";
+        if (!env.MUSIC_API_TOKEN || auth !== `Bearer ${env.MUSIC_API_TOKEN}`) return json(401, { error: "unauthorized" });
+        if (!env.DB) return json(503, { error: "history unavailable (no D1 binding)" });
+        const u = new URL(request.url);
+        try {
+          const tracks = await recentTracks(env, {
+            session_id: u.searchParams.get("session_id"),
+            limit: u.searchParams.get("limit"),
+          });
+          return json(200, { tracks });
+        } catch (e) {
+          return json(500, { error: "history query failed", detail: String(e.message || e) });
+        }
+      }
       if (pathname === "/" || pathname === "/help") {
         return json(200, {
           service: "Riff music API (Cloudflare Worker · Phase 3 P0+P2 · Tier-A link)",
-          auth: "Authorization: Bearer <MUSIC_API_TOKEN> on every POST",
+          auth: "Authorization: Bearer <MUSIC_API_TOKEN> on every POST and on GET /history",
           endpoints: {
             "POST /generate": "{prompt, session_id?, repair_attempts?=2} → {strudel_code, share_url, audio_url:null, version, session_id} (prompt → Strudel via gpt-5.4; auto-repairs invalid Strudel; pass a stable session_id to enable /modify)",
             "POST /modify": "{session_id, instruction, repair_attempts?=2} → {strudel_code, share_url, diff, version, parent_id} (edits the session's latest version — 'faster' / 'darker' / 'add a bassline' — and returns the code diff)",
             "POST /render": "{code, session_id?} → same shape (validates + links Strudel you already have)",
+            "GET /history": "?session_id=…&limit=…(≤100, default 20) → {tracks:[…]} (cross-session history from D1, newest first)",
             "GET /health": "{ok:true}",
           },
-          note: "Tier-A: returns code + a one-click strudel.cc play link, and a per-session modify chain (Durable Object). Audio render (audio_url) arrives in Phase 3 P1 (Container).",
+          note: "Tier-A: code + a one-click strudel.cc play link, a per-session modify chain (Durable Object), and cross-session history (D1, daily-pruned). Audio render (audio_url) arrives in Phase 3 P1 (Container).",
         });
       }
       return json(404, { error: "not found" });
@@ -209,5 +247,13 @@ export default {
 
     if (request.method === "POST") return handlePost(request, env, pathname);
     return json(405, { error: "method not allowed" });
+  },
+
+  // Daily Cron Trigger (wrangler.toml [triggers]) → prune tracks older than RETENTION_DAYS so the D1
+  // tracks log can't grow into the 10 GB cap. A DELETE is cheap → safe to run inline in the 30s cron CPU.
+  async scheduled(event, env, ctx) {
+    const days = parseInt(env.RETENTION_DAYS, 10) || 30;
+    const deleted = await pruneTracks(env, days);
+    console.log(`retention: pruned ${deleted} track(s) older than ${days}d`);
   },
 };

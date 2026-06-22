@@ -47,7 +47,7 @@ python3 "$mock" "$MOCKPORT" & MOCK_PID=$!
 # --persist-to a FRESH temp dir so Durable Object state starts empty every run (the default
 # .wrangler/state persists across runs → version numbers would accumulate and the asserts would drift).
 STATE="/tmp/worker-state.$$"
-wrangler dev --port "$PORT" --inspector-port 0 --ip 127.0.0.1 --persist-to "$STATE" \
+wrangler dev --port "$PORT" --inspector-port 0 --ip 127.0.0.1 --persist-to "$STATE" --test-scheduled \
   --var "MUSIC_API_TOKEN:$TOK" --var "OPENAI_API_KEY:mock-key" \
   --var "OPENAI_BASE_URL:http://127.0.0.1:$MOCKPORT" \
   >/tmp/worker-dev.$$ 2>&1 </dev/null & DEV_PID=$!
@@ -123,7 +123,42 @@ post /modify '{"instruction":"darker"}'
 
 RESP=$(curl -s -X POST "$base/modify" --data '{"session_id":"s1","instruction":"x"}' -w $'\n%{http_code}');
 [ "${RESP##*$'\n'}" = 401 ] && ok "POST /modify no auth → 401" || bad "modify no-auth"
-rm -f /tmp/worker-resp.$$
+
+# History (D1). s1 now has generate(v1) + modify(v2) + modify(v3) from above.
+get(){ RESP=$(curl -s -w $'\n%{http_code}' -H "Authorization: Bearer $TOK" "$base$1"); CODE=${RESP##*$'\n'}; RESP=${RESP%$'\n'*}; }
+
+RESP=$(curl -s -o /dev/null -w '%{http_code}' "$base/history?session_id=s1")
+[ "$RESP" = 401 ] && ok "GET /history no auth → 401" || bad "history no-auth ($RESP)"
+
+get "/history?session_id=s1"
+{ [ "$CODE" = 200 ] && has '"session_id":"s1"' && has 'RolandTR909'; } \
+  && ok "GET /history?session_id=s1 → persisted tracks" || bad "history s1 (code=$CODE)"
+
+get "/history?session_id=ghost-session"
+{ [ "$CODE" = 200 ] && has '"tracks":[]'; } \
+  && ok "GET /history unknown session → empty" || bad "history empty (code=$CODE)"
+
+get "/history?limit=100"
+{ [ "$CODE" = 200 ] && has 'RolandTR909'; } && ok "GET /history (global) → tracks" || bad "history global (code=$CODE)"
+
+# Retention cron: backdate a row, fire scheduled(), confirm it's pruned and recent rows survive.
+# (wrangler d1 execute on the same local DB while dev runs can hit a lock; tolerate that → wiring-only.)
+oldsql="/tmp/worker-old.$$.sql"
+printf "INSERT INTO tracks (id,source,strudel_code,share_url,version,created_at) VALUES ('old-row-1','generate','x','https://strudel.cc/#x',1,1);\n" > "$oldsql"
+if wrangler d1 execute riff-tracks --local --persist-to "$STATE" --file "$oldsql" >/tmp/worker-d1.$$ 2>&1; then
+  get "/history?limit=100"; has 'old-row-1' \
+    && ok "retention: backdated row present before prune" || bad "retention: backdated row not visible (see /tmp/worker-d1.$$)"
+  sc=$(curl -s -o /dev/null -w '%{http_code}' "$base/__scheduled?cron=0+4+*+*+*")
+  [ "$sc" = 200 ] && ok "retention: scheduled() fired ($sc)" || bad "retention: scheduled fire ($sc)"
+  get "/history?limit=100"
+  { ! has 'old-row-1' && has 'RolandTR909'; } \
+    && ok "retention: old row pruned, recent kept" || bad "retention: prune incorrect"
+else
+  echo "  SKIP — d1 execute couldn't seed concurrently; testing cron WIRING only:"
+  sc=$(curl -s -o /dev/null -w '%{http_code}' "$base/__scheduled?cron=0+4+*+*+*")
+  [ "$sc" = 200 ] && ok "retention: scheduled() fires without error ($sc)" || bad "retention: scheduled fire ($sc)"
+fi
+rm -f /tmp/worker-resp.$$ "$oldsql" /tmp/worker-d1.$$
 
 echo
 if [ "$fails" -eq 0 ]; then echo "PASS"; else echo "$fails FAILED"; fi

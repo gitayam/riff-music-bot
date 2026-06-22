@@ -19,10 +19,18 @@ the hard part (headless-Chromium render in a Container).
 | `POST /generate` | `{prompt, session_id?, repair_attempts?=2}` | `{prompt, session_id, strudel_code, share_url, audio_url:null, version, parent_id, engine}` |
 | `POST /modify` | `{session_id, instruction, repair_attempts?=2}` | `{strudel_code, share_url, diff, version, parent_id, …}` — edits the session's latest version |
 | `POST /render` | `{code, session_id?}` | same shape (validates + links code you already have; never rewrites it) |
+| `GET /history` | `?session_id=…&limit=…` | `{tracks:[…]}` — cross-session history from D1, newest first (bearer-gated) |
 
-`POST` requires `Authorization: Bearer <MUSIC_API_TOKEN>` (same contract as `api-server.py`). Errors:
-`400` bad/missing field · `401` unauthorized · `404` unknown session (modify) · `422` invalid Strudel ·
-`502` LLM upstream/config · `504` LLM timeout.
+`POST` and `GET /history` require `Authorization: Bearer <MUSIC_API_TOKEN>` (same contract as
+`api-server.py`). Errors: `400` bad/missing field · `401` unauthorized · `404` unknown session (modify) ·
+`422` invalid Strudel · `502` LLM upstream/config · `503` history without a D1 binding · `504` LLM timeout.
+
+**History + retention (D1):** every generate/modify/render is logged as a `tracks` row (Contract 5),
+queryable via `GET /history` (optionally scoped to a `session_id`). Persistence is **best-effort** — a D1
+hiccup is logged but never breaks the music response. A **daily Cron Trigger** (`scheduled()` →
+`pruneTracks`) deletes rows older than `RETENTION_DAYS` (default 30) so the log can't grow into D1's
+10 GB cap. Schema: `migrations/0001_create_tracks.sql` (also created lazily by `src/store.js`, so local
+`wrangler dev` and a fresh deploy both just work).
 
 **The modify loop:** pass a stable `session_id` (e.g. `"discord:user:1234"`) to `/generate`; then
 `POST /modify {session_id, instruction:"make it darker"}` loads the last version, asks the model to edit
@@ -41,9 +49,11 @@ npm test                            # pure-helper unit tests
 ./test.sh                           # unit + a live wrangler-dev pass against a mock OpenAI
 npx wrangler dev                    # local edge runtime on :8787
 
-# deploy (set secrets once, then ship):
+# deploy (set secrets + create the D1 DB once, then ship):
 npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put MUSIC_API_TOKEN
+npx wrangler d1 create riff-tracks            # paste the printed id into wrangler.toml database_id
+npx wrangler d1 migrations apply riff-tracks --remote
 npx wrangler deploy
 ```
 
@@ -56,6 +66,7 @@ Gateway** in prod for caching + rate-limit + cost observability) are non-secret 
 - **The authoritative `@strudel/transpiler` parse-gate** → P1 (ships with the Container). `validateStrudel()`
   here is a lightweight structural pre-check that catches prose-instead-of-code and the `[ ...whole program... ]`
   wrap bug; it is not a full parse.
-- **Cross-session `tracks` history in D1** + **embeddings in Vectorize** ("more like this") → the rest of Phase 3 P2.
-  (The per-session modify chain itself — the Durable Object — is **built**, above.)
+- **Embeddings in Vectorize** ("more like this" similarity) → the last Phase 3 P2 piece. (Deferred because
+  Vectorize has no real local-dev emulation — it needs a remote binding/account to verify; D1 + DO both run
+  locally in `wrangler dev`, which is why they shipped first.)
 - **Discord-native Interactions webhook** (retires the daemon + watcher) → Phase 3 P3.

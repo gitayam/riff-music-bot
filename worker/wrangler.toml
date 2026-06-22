@@ -11,9 +11,24 @@ compatibility_date = "2026-06-01"
 [vars]
 OPENAI_MODEL = "gpt-5.4"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+RETENTION_DAYS = "30"   # tracks older than this are pruned by the daily cron (D1 10 GB cap)
 
 [observability]
 enabled = true
+
+# Cross-session tracks history (Phase 3 P2, Contract 5). Create the DB once with
+# `wrangler d1 create riff-tracks` and paste its id below; `wrangler dev` uses a LOCAL D1 (the id is
+# ignored locally). Schema: migrations/0001_create_tracks.sql (apply with `wrangler d1 migrations
+# apply riff-tracks --remote`); src/store.js also creates it lazily so local dev / a fresh deploy work.
+[[d1_databases]]
+binding = "DB"
+database_name = "riff-tracks"
+database_id = "REPLACE_WITH_d1_create_id"
+migrations_dir = "migrations"
+
+# Daily retention prune (scheduled() → pruneTracks). 04:00 UTC.
+[triggers]
+crons = ["0 4 * * *"]
 
 # Per-session modify chain (Phase 3 P2). One Durable Object per conversation (session_id) holds
 # the ordered code versions so /modify edits the last one. SQLite-backed; runs locally in `wrangler dev`.
