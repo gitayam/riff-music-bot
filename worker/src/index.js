@@ -20,13 +20,15 @@ import {
   modifyUserContent, diffString, audioFormat, audioKey, audioUrlFor, audioContentType,
 } from "./lib.js";
 import { Session } from "./session.js";
+import { RenderContainer } from "./render-container.js";
+import { getContainer } from "@cloudflare/containers";
 import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec, embeddedTracks, trackById } from "./store.js";
 import { rankBySimilarity, parseEmbedding } from "./similar.js";
 import {
   T, verifyInteractionSignature, commandPrompt, interactionSessionId, followupUrl, followupContent,
 } from "./discord.js";
 
-export { Session }; // the runtime needs the DO class exported from the entry module
+export { Session, RenderContainer }; // the runtime needs the DO / Container classes exported from the entry module
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -121,15 +123,22 @@ function sessionStub(env, sessionId) {
 // Returns {bytes, fmt} on success, or {error} — never throws. Shared by the HTTP API (tryRender,
 // which stores to R2) and the Discord follow-up (which attaches the bytes to the message).
 async function renderBytes(env, code, cycles, format) {
-  if (!env.RENDER_SERVICE_URL) return { error: "render service not configured" };
   const fmt = audioFormat(format);
+  const body = JSON.stringify({ code, cycles, format: fmt });
+  // Cold container provisioning can take a while; a warm instance renders in ~8s. Allow generous headroom.
+  const init = { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(120000) };
   try {
-    const r = await fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, cycles, format: fmt }),
-      signal: AbortSignal.timeout(60000),
-    });
+    let r;
+    if (env.RENDER) {
+      // Cloudflare Container (prod, Workers Paid). Routed to a warm instance by the binding — the
+      // hostname is arbitrary (the request never hits DNS). getContainer() = a singleton instance.
+      r = await getContainer(env.RENDER).fetch(new Request("https://render.internal/render", init));
+    } else if (env.RENDER_SERVICE_URL) {
+      // External render service (local dev / a node process behind a URL) — Tier-A fallback.
+      r = await fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, init);
+    } else {
+      return { error: "render service not configured" };
+    }
     if (!r.ok) return { error: `render service returned ${r.status}` };
     const bytes = new Uint8Array(await r.arrayBuffer());
     if (bytes.length === 0) return { error: "render service returned empty audio" };
@@ -143,7 +152,7 @@ async function renderBytes(env, code, cycles, format) {
 // the code + share link; any failure degrades to {render_error}, never throws. {} when not wanted/wired.
 async function tryRender(env, { code, cycles, format, id, requestUrl, want }) {
   if (!want) return {};
-  if (!env.RENDER_SERVICE_URL || !env.AUDIO) return {}; // not wired (Tier-A) — no error, just no audio
+  if ((!env.RENDER && !env.RENDER_SERVICE_URL) || !env.AUDIO) return {}; // not wired (Tier-A) — no error, just no audio
   const out = await renderBytes(env, code, cycles, format);
   if (out.error) return { render_error: out.error };
   try {

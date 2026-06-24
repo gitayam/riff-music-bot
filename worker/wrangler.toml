@@ -31,7 +31,7 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "riff-tracks"
-database_id = "REPLACE_WITH_d1_create_id"
+database_id = "6fe6b06a-e0cb-4510-be5c-b4fba536e761"
 migrations_dir = "migrations"
 
 # Daily retention prune (scheduled() → pruneTracks). 04:00 UTC.
@@ -54,6 +54,26 @@ class_name = "Session"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Session"]
+
+# ── Render Container (Phase 3 P1 last mile — Workers Paid) ──────────────────────────────────────
+# The headless-Chromium + ffmpeg render service (container/server.mjs). The Worker forwards /render
+# to a warm instance via the RENDER binding (renderBytes() in src/index.js). Built from
+# container/Dockerfile at `wrangler deploy`. The Dockerfile COPYs render/ + container/server.mjs, so
+# the build context is the REPO ROOT (image_build_context = ".."), not worker/.
+[[containers]]
+class_name = "RenderContainer"
+image = "../container/Dockerfile"
+image_build_context = ".."
+max_instances = 2
+instance_type = "standard-1"   # 4 GiB RAM — headless-Chromium audio render needs the headroom
+
+[[durable_objects.bindings]]
+name = "RENDER"
+class_name = "RenderContainer"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RenderContainer"]
 
 # Secrets (NOT stored here — set per-environment):
 #   npx wrangler secret put OPENAI_API_KEY     # the gpt-5.4 key (local .env OPENAI_API)
