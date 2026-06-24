@@ -125,19 +125,31 @@ function sessionStub(env, sessionId) {
 async function renderBytes(env, code, cycles, format) {
   const fmt = audioFormat(format);
   const body = JSON.stringify({ code, cycles, format: fmt });
-  // Cold container provisioning can take a while; a warm instance renders in ~8s. Allow generous headroom.
-  const init = { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(120000) };
-  try {
-    let r;
+  // One render attempt with a fresh per-try timeout (a warm instance renders in ~8s).
+  const call = () => {
+    const init = { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(60000) };
     if (env.RENDER) {
-      // Cloudflare Container (prod, Workers Paid). Routed to a warm instance by the binding — the
-      // hostname is arbitrary (the request never hits DNS). getContainer() = a singleton instance.
-      r = await getContainer(env.RENDER).fetch(new Request("https://render.internal/render", init));
-    } else if (env.RENDER_SERVICE_URL) {
+      // Cloudflare Container (prod, Workers Paid). Routed to an instance by the binding — the hostname
+      // is arbitrary (the request never hits DNS). getContainer() = a singleton instance.
+      return getContainer(env.RENDER).fetch(new Request("https://render.internal/render", init));
+    }
+    if (env.RENDER_SERVICE_URL) {
       // External render service (local dev / a node process behind a URL) — Tier-A fallback.
-      r = await fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, init);
-    } else {
-      return { error: "render service not configured" };
+      return fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, init);
+    }
+    return null; // not configured
+  };
+  try {
+    let r = null;
+    // A container scaled-to-zero (sleepAfter) 503s IMMEDIATELY while it cold-starts — the binding does
+    // not block-wait. Retry through that so the first /riff after idle still gets audio instead of
+    // degrading to code+link (README: keep the K=2 cold-start/flake retry wrapper).
+    for (let i = 0; i < 3; i++) {
+      const res = call();
+      if (res === null) return { error: "render service not configured" };
+      r = await res;
+      if (r.status !== 503) break;                       // got a real answer (200, or a 4xx like 422)
+      await new Promise((s) => setTimeout(s, 7000));      // give the cold instance time to finish booting
     }
     if (!r.ok) return { error: `render service returned ${r.status}` };
     const bytes = new Uint8Array(await r.arrayBuffer());
