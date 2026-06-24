@@ -8,7 +8,9 @@
 FROM mcr.microsoft.com/playwright:v1.61.0-jammy
 
 # ffmpeg is the one extra system dep (transcode WAV → mp3/ogg + limiter).
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# ffmpeg = transcode/limiter. jq = parse the OpenAI TTS response in render/tts.sh (the spoken-vocal
+# "🎤 say" path strudel-watch uses). sox = audio mixing fallback for the voice layer.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg jq sox && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
