@@ -20,15 +20,13 @@ import {
   modifyUserContent, diffString, audioFormat, audioKey, audioUrlFor, audioContentType,
 } from "./lib.js";
 import { Session } from "./session.js";
-import { RenderContainer } from "./render-container.js";
-import { getContainer } from "@cloudflare/containers";
 import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec, embeddedTracks, trackById } from "./store.js";
 import { rankBySimilarity, parseEmbedding } from "./similar.js";
 import {
   T, verifyInteractionSignature, commandPrompt, interactionSessionId, followupUrl, followupContent,
 } from "./discord.js";
 
-export { Session, RenderContainer }; // the runtime needs the DO / Container classes exported from the entry module
+export { Session }; // the runtime needs the DO class exported from the entry module
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -125,25 +123,19 @@ function sessionStub(env, sessionId) {
 async function renderBytes(env, code, cycles, format) {
   const fmt = audioFormat(format);
   const body = JSON.stringify({ code, cycles, format: fmt });
-  // One render attempt with a fresh per-try timeout (a warm instance renders in ~8s).
+  // One render attempt with a fresh per-try timeout (the render service answers in ~1-8s).
   const call = () => {
-    const init = { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(60000) };
-    if (env.RENDER) {
-      // Cloudflare Container (prod, Workers Paid). Routed to an instance by the binding — the hostname
-      // is arbitrary (the request never hits DNS). getContainer() = a singleton instance.
-      return getContainer(env.RENDER).fetch(new Request("https://render.internal/render", init));
-    }
-    if (env.RENDER_SERVICE_URL) {
-      // External render service (local dev / a node process behind a URL) — Tier-A fallback.
-      return fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, init);
-    }
-    return null; // not configured
+    if (!env.RENDER_SERVICE_URL) return null; // not configured (Tier-A: code + link only)
+    const headers = { "Content-Type": "application/json" };
+    // The render service (self-hosted on Proxmox, reached over the CF tunnel) requires the shared
+    // bearer — reuse the Worker's MUSIC_API_TOKEN so there's one secret to rotate.
+    if (env.MUSIC_API_TOKEN) headers["Authorization"] = `Bearer ${env.MUSIC_API_TOKEN}`;
+    return fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, { method: "POST", headers, body, signal: AbortSignal.timeout(60000) });
   };
   try {
     let r = null;
-    // A container scaled-to-zero (sleepAfter) 503s IMMEDIATELY while it cold-starts — the binding does
-    // not block-wait. Retry through that so the first /riff after idle still gets audio instead of
-    // degrading to code+link (README: keep the K=2 cold-start/flake retry wrapper).
+    // Retry a transient 503 (e.g. the render service restarting / a tunnel reconnect) so a blip
+    // degrades gracefully rather than dropping the audio. Steady state answers on the first try.
     for (let i = 0; i < 3; i++) {
       const res = call();
       if (res === null) return { error: "render service not configured" };
@@ -164,7 +156,7 @@ async function renderBytes(env, code, cycles, format) {
 // the code + share link; any failure degrades to {render_error}, never throws. {} when not wanted/wired.
 async function tryRender(env, { code, cycles, format, id, requestUrl, want }) {
   if (!want) return {};
-  if ((!env.RENDER && !env.RENDER_SERVICE_URL) || !env.AUDIO) return {}; // not wired (Tier-A) — no error, just no audio
+  if (!env.RENDER_SERVICE_URL || !env.AUDIO) return {}; // not wired (Tier-A) — no error, just no audio
   const out = await renderBytes(env, code, cycles, format);
   if (out.error) return { render_error: out.error };
   try {

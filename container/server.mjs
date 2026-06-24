@@ -26,6 +26,10 @@ const RENDER_DIR = process.env.RENDER_DIR || resolve(HERE, "..", "render");
 const RENDER = join(RENDER_DIR, "strudel-render.mjs");
 const PORT = parseInt(process.env.PORT, 10) || 8800;
 const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS, 10) || 180000;
+// When set, /render requires `Authorization: Bearer <RENDER_TOKEN>`. Set on the server (compose
+// env_file) once the service is exposed via a public tunnel; the Worker sends the same token.
+// Unset (local dev) = open, so test.sh / a local node process need no header.
+const RENDER_TOKEN = process.env.RENDER_TOKEN || "";
 
 const FMT = { mp3: ["-c:a", "libmp3lame", "-q:a", "4"], ogg: ["-c:a", "libopus", "-b:a", "96k"], wav: null };
 const CTYPE = { mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav" };
@@ -89,6 +93,10 @@ function sendJson(res, status, obj) {
 const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") return sendJson(res, 200, { ok: true });
   if (req.method === "POST" && (req.url || "").split("?")[0] === "/render") {
+    // Bearer gate (only when RENDER_TOKEN is configured) — the service is public via the tunnel.
+    if (RENDER_TOKEN && (req.headers["authorization"] || "") !== `Bearer ${RENDER_TOKEN}`) {
+      return sendJson(res, 401, { error: "unauthorized" });
+    }
     let raw = "";
     req.on("data", (c) => { raw += c; if (raw.length > 2_000_000) req.destroy(); });
     req.on("end", async () => {
