@@ -36,7 +36,7 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 - [x] **R1.3** Strengthen the 422 repair loop in `worker/src/index.js`/`lib.js` (`repairPrompt`): when the render service returns 422, include the engine error + "use only the supported subset" in the repair regeneration (within existing `repair_attempts`). Add a test that a 422-then-fix path is exercised (mock the render fetch). Verify.
 
 ### Phase R2 — Tests + safety nets
-- [ ] **R2.1** Worker unit tests in `worker/test/`: `renderBytes` sends `Authorization: Bearer <MUSIC_API_TOKEN>` to `RENDER_SERVICE_URL`, retries on 503 (3×), and returns `{error}` not throw; `tryRender` guard (no AUDIO/URL → `{}`); discord Ed25519 verify (valid/invalid sig); bearer auth gate (no token → 401). Run `npm --prefix worker test` green.
+- [x] **R2.1** Worker unit tests in `worker/test/`: `renderBytes` sends `Authorization: Bearer <MUSIC_API_TOKEN>` to `RENDER_SERVICE_URL`, retries on 503 (3×), and returns `{error}` not throw; `tryRender` guard (no AUDIO/URL → `{}`); discord Ed25519 verify (valid/invalid sig); bearer auth gate (no token → 401). Run `npm --prefix worker test` green.
 - [ ] **R2.2** Add `scripts/health-check.sh` + `deploy/riff-health.service` + `deploy/riff-health.timer` (in-repo only, NOT installed): checks `systemctl is-active zeroclaw-hermes`, strudel-watch heartbeat age, `riff-render /health`, Worker `/health`; on any failure `curl -d` to ntfy (topic via env, default ntfy.alfaren.xyz). Verify the script runs locally against the live endpoints (read-only). Installing it on Proxmox is **D2** (decision).
 
 ### Phase R3 — Docs
@@ -90,3 +90,14 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 > 3→0; worker test 63 green; dry-run clean. Deploy is MANUAL (do NOT auto-deploy the live bot):
 > `cd worker && npx wrangler@4.103.0 deploy`. The Proxmox render service is unchanged by this phase
 > (no `render/` edits), so no container rebuild is needed. Verify after: `curl <verify_url>`.
+
+2026-06-26  R2.1  files=worker/src/render.js,worker/src/lib.js,worker/src/index.js,worker/test/render.test.mjs,worker/test/lib.test.mjs  corpus-render-failures 0->0  commit 42f4cdd3  status=DONE
+
+> **R2.1 note.** index.js can't load under `node --test` (it imports `cloudflare:workers`), so the
+> behavior-preserving move of leaf `renderBytes` + `audioWired` → `src/render.js` and pure `bearerOk`
+> → `lib.js` is what makes these node-testable. Covered: renderBytes auth header / 503×3 retry /
+> never-throws / not-configured / empty / 422-no-retry; audioWired guard; bearerOk gate. Discord
+> Ed25519 verify was ALREADY tested (discord.test.mjs). tryRender's full body stays in index.js (it
+> depends on composeValid/callOpenAI, also workerd-bound); its guard CONDITION is now tested via
+> audioWired, and its 422-repair via repair.test.mjs (R1.3) — a full handlePost integration test
+> would need a workerd test pool (out of scope). Worker test 63→73.
