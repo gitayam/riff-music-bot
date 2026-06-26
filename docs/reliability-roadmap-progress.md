@@ -1,0 +1,56 @@
+---
+focus: reliability
+target: .
+branch: looper/reliability
+verify: npm --prefix worker run dry-run
+ratchet:
+  tool: "node scripts/render-corpus.mjs --json"
+  metric: corpus-render-failures
+  baseline: TBD   # established by R0.1; write the number back here when R0.1 completes
+autonomy: senior-dev
+push: branch
+deploy: manual            # live Discord bot, no single deploy.sh — loop logs "ready to deploy" at phase end, never auto-deploys
+deploy_cmd: "MANUAL: cd worker && npx wrangler@4.103.0 deploy  # + Proxmox: docker compose up -d --build / systemctl restart"
+verify_url: https://riff-music-api.wemea-5ahhf.workers.dev/health
+max_iterations: 30
+---
+
+# Riff Reliability Roadmap — Progress Ledger
+
+Canonical worklist + state for autonomous execution. **The loop reads this file to decide what to do
+next** and writes back after each unit. Plan/rationale lives in `reliability-roadmap.md`.
+
+- `[ ]` todo · `[x]` done · `[~]` crashed mid-unit (reset & redo) · `[!]` blocked/decision
+- **AUTO** = the loop executes it. **DECISION** = senior-dev decides if reversible, else ESCALATE.
+- Do units top to bottom. Don't start a later unit while an earlier AUTO unit is unchecked.
+- pgk: use `wrangler@4.103.0` (4.104.0 breaks container/worker version deploys — see memory). Worker is plain JS (no typecheck); `dry-run` is the bundle gate. The ratchet runs the real render engine locally.
+
+## AUTO worklist (loop executes, in order)
+
+### Phase R0 — Foundation: render corpus + baseline (MUST be first; sets the ratchet)
+- [ ] **R0.1** Build `scripts/render-corpus.mjs` — runs each snippet in `scripts/render-corpus/*.js` through `render/strudel-render.mjs` (code on stdin, 2 cycles), prints `{total, failures, failing:[name…]}` as `--json`. Seed the corpus: ≥6 known-good loops + the known-`422` cases (`.lpenv()`, `.swingBy()`, `.sometimes(x=>x.fast(2))`), and pull a few real failing `strudel_code` rows from D1 (`wrangler d1 execute riff-tracks --remote --command "SELECT strudel_code FROM tracks WHERE audio_url IS NULL LIMIT 10"`). Run it, record the failure count, and **write it into this file's front-matter `ratchet.baseline`**. Verify: harness prints valid JSON; commit harness + corpus + baseline.
+
+### Phase R1 — Render hit-rate (core)
+- [ ] **R1.1** Add a post-compose Strudel sanitizer `worker/src/sanitize.js` (pure fn `sanitizeStrudel(code) -> code`) that rewrites/strips engine-unsupported constructs (map/drop `.lpenv(...)`, `.swingBy(...)`→`.swing()`, unwrap `.sometimes(x=>…)` to a safe form or drop). Wire it into the compose path in `worker/src/index.js` (after `extractStrudel`/`validateStrudel`, before share/render). Add `worker/test/sanitize.test.mjs`. Re-run the ratchet — `corpus-render-failures` MUST drop. (Mirror the same fn into the render service later if it helps; keep it shared-shaped.)
+- [ ] **R1.2** Constrain the compose prompt to the supported Strudel subset: edit the system/transform guidance in `worker/src/lib.js` (`buildChatBody`) and `souls/hermes.SOUL.md`'s intent→Strudel table to forbid `.lpenv`/`.swingBy`/arrow-`.sometimes` and prefer supported equivalents. Re-run ratchet on prompt-derived corpus entries; verify dry-run.
+- [ ] **R1.3** Strengthen the 422 repair loop in `worker/src/index.js`/`lib.js` (`repairPrompt`): when the render service returns 422, include the engine error + "use only the supported subset" in the repair regeneration (within existing `repair_attempts`). Add a test that a 422-then-fix path is exercised (mock the render fetch). Verify.
+
+### Phase R2 — Tests + safety nets
+- [ ] **R2.1** Worker unit tests in `worker/test/`: `renderBytes` sends `Authorization: Bearer <MUSIC_API_TOKEN>` to `RENDER_SERVICE_URL`, retries on 503 (3×), and returns `{error}` not throw; `tryRender` guard (no AUDIO/URL → `{}`); discord Ed25519 verify (valid/invalid sig); bearer auth gate (no token → 401). Run `npm --prefix worker test` green.
+- [ ] **R2.2** Add `scripts/health-check.sh` + `deploy/riff-health.service` + `deploy/riff-health.timer` (in-repo only, NOT installed): checks `systemctl is-active zeroclaw-hermes`, strudel-watch heartbeat age, `riff-render /health`, Worker `/health`; on any failure `curl -d` to ntfy (topic via env, default ntfy.alfaren.xyz). Verify the script runs locally against the live endpoints (read-only). Installing it on Proxmox is **D2** (decision).
+
+### Phase R3 — Docs
+- [ ] **R3.1** Refresh `README.md` + add a "Production (2026-06)" current-state block to `docs/sundai-zeroclaw-music-roadmap.md`: Worker-on-CF + Proxmox (hermes/strudel-watch/riff-render) topology, the off-laptop migration, and the render-corpus ratchet. Do NOT uncheck/rewrite the sundai roadmap's existing `[x]`/history — append only.
+
+## DECISION units (senior-dev decides if REVERSIBLE; else returns ESCALATE — do NOT guess)
+- [!] **D1** Add *native* engine support for `.lpenv`/`.swingBy`/`.sometimes` in `render/strudel-render.mjs` + `render.html` (vs sanitizing them away in R1.1). _Reversible (additive) — senior-dev may decide. Question: is supporting these worth the engine complexity, or is restrict-to-subset (R1.1/R1.2) sufficient? Must keep the offline guarantee._
+- [!] **D2** Install the R2.2 health-check on Proxmox (host systemd timer + a real ntfy topic). _Outward-facing, touches the production host → ESCALATE with the exact unit/timer to install._
+- [!] **D3** Split the bundled `ai-coding-env` commit `3d0d95a` (it swept in pre-staged `_archived-obelisk` renames). _Requires force-push to `main` — irreversible history rewrite → ESCALATE; recommend leaving as-is (pure renames, harmless)._
+
+## Decisions log (senior-dev appends ADR-style rationale here)
+<!-- <date> <id> DECIDED: <choice> — rationale … — reversible: yes/no — by: senior-dev -->
+
+## Log
+<!-- one line per unit:
+<YYYY-MM-DD>  <id>  files=<…>  corpus-render-failures <before>-><after>  commit <sha8>  status=DONE|BLOCKED:<reason>
+-->
