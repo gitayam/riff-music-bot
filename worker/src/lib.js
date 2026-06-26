@@ -35,6 +35,12 @@ export function shareUrl(code) {
   return "https://strudel.cc/#" + b64utf8(code);
 }
 
+// True iff the request carries the exact shared bearer. Centralizes the POST + GET /history auth
+// gate (api-server.py contract: no token configured OR mismatch → 401). Pure → unit-tested.
+export function bearerOk(authHeader, token) {
+  return !!token && authHeader === `Bearer ${token}`;
+}
+
 const FENCE_RE = /```(?:javascript|js)?\s*\n([\s\S]*?)```/;
 
 // Pull the first ```javascript (or bare ```) block out of an LLM reply. null if there is none.

@@ -17,10 +17,11 @@
 
 import {
   shareUrl, extractStrudel, validateStrudel, buildChatBody, repairPrompt,
-  modifyUserContent, diffString, audioFormat, audioKey, audioUrlFor, audioContentType,
-  renderRepairPrompt, renderWithRepair,
+  modifyUserContent, diffString, audioKey, audioUrlFor, audioContentType,
+  renderRepairPrompt, renderWithRepair, bearerOk,
 } from "./lib.js";
 import { sanitizeStrudel } from "./sanitize.js";
+import { renderBytes, audioWired } from "./render.js";
 import { Session } from "./session.js";
 import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec, embeddedTracks, trackById } from "./store.js";
 import { rankBySimilarity, parseEmbedding } from "./similar.js";
@@ -123,40 +124,8 @@ function sessionStub(env, sessionId) {
   return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId));
 }
 
-// Render code → audio bytes via the render service (a Container in prod; a node process locally).
-// Returns {bytes, fmt} on success, or {error} — never throws. Shared by the HTTP API (tryRender,
-// which stores to R2) and the Discord follow-up (which attaches the bytes to the message).
-async function renderBytes(env, code, cycles, format) {
-  const fmt = audioFormat(format);
-  const body = JSON.stringify({ code, cycles, format: fmt });
-  // One render attempt with a fresh per-try timeout (the render service answers in ~1-8s).
-  const call = () => {
-    if (!env.RENDER_SERVICE_URL) return null; // not configured (Tier-A: code + link only)
-    const headers = { "Content-Type": "application/json" };
-    // The render service (self-hosted on Proxmox, reached over the CF tunnel) requires the shared
-    // bearer — reuse the Worker's MUSIC_API_TOKEN so there's one secret to rotate.
-    if (env.MUSIC_API_TOKEN) headers["Authorization"] = `Bearer ${env.MUSIC_API_TOKEN}`;
-    return fetch(`${env.RENDER_SERVICE_URL.replace(/\/+$/, "")}/render`, { method: "POST", headers, body, signal: AbortSignal.timeout(60000) });
-  };
-  try {
-    let r = null;
-    // Retry a transient 503 (e.g. the render service restarting / a tunnel reconnect) so a blip
-    // degrades gracefully rather than dropping the audio. Steady state answers on the first try.
-    for (let i = 0; i < 3; i++) {
-      const res = call();
-      if (res === null) return { error: "render service not configured" };
-      r = await res;
-      if (r.status !== 503) break;                       // got a real answer (200, or a 4xx like 422)
-      await new Promise((s) => setTimeout(s, 7000));      // give the cold instance time to finish booting
-    }
-    if (!r.ok) return { error: `render service returned ${r.status}` };
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    if (bytes.length === 0) return { error: "render service returned empty audio" };
-    return { bytes, fmt };
-  } catch (e) {
-    return { error: String(e.message || e).slice(0, 150) };
-  }
-}
+// renderBytes (render-service client) + audioWired (the render-path guard) live in ./render.js so
+// they unit-test under node — index.js can't (it imports cloudflare:workers). Imported above.
 
 // P1 last mile for the HTTP API: render → store in R2 → served audio_url. BEST-EFFORT — you always get
 // the code + share link; any failure degrades to {render_error}, never throws. Always returns {code}
@@ -164,8 +133,7 @@ async function renderBytes(env, code, cycles, format) {
 // `initialContent` (the prompt/modify ask) enables R1.3 render-422 repair; omit it (e.g. /render) to
 // never rewrite caller-supplied code.
 async function tryRender(env, { code, initialContent, attempts, cycles, format, id, requestUrl, want }) {
-  if (!want) return { code };
-  if (!env.RENDER_SERVICE_URL || !env.AUDIO) return { code }; // not wired (Tier-A) — no error, just no audio
+  if (!want || !audioWired(env)) return { code }; // not wanted, or not wired (Tier-A: code + link, no audio)
   // Render, repairing on a render-engine 422 (feed the engine error back to the LLM + recompose,
   // within repair_attempts). Happy path renders exactly once and leaves `code` unchanged.
   const { code: finalCode, result: out } = await renderWithRepair({
@@ -221,7 +189,7 @@ function embedSource(req, code, instruction) {
 async function handlePost(request, env, path) {
   // Auth — same contract as api-server.py: no token configured OR mismatch → 401.
   const auth = request.headers.get("Authorization") || "";
-  if (!env.MUSIC_API_TOKEN || auth !== `Bearer ${env.MUSIC_API_TOKEN}`) {
+  if (!bearerOk(auth, env.MUSIC_API_TOKEN)) {
     return json(401, { error: "unauthorized" });
   }
   let req;
@@ -452,7 +420,7 @@ export default {
       if (pathname === "/history") {
         // Exposes other sessions' content → bearer-gated like the POSTs.
         const auth = request.headers.get("Authorization") || "";
-        if (!env.MUSIC_API_TOKEN || auth !== `Bearer ${env.MUSIC_API_TOKEN}`) return json(401, { error: "unauthorized" });
+        if (!bearerOk(auth, env.MUSIC_API_TOKEN)) return json(401, { error: "unauthorized" });
         if (!env.DB) return json(503, { error: "history unavailable (no D1 binding)" });
         const u = new URL(request.url);
         try {

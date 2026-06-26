@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { shareUrl, b64utf8, extractStrudel, validateStrudel, buildChatBody, SYSTEM_PROMPT, lineDiff, diffString, modifyUserContent, audioFormat, audioContentType, audioKey, audioUrlFor } from "../src/lib.js";
+import { shareUrl, b64utf8, extractStrudel, validateStrudel, buildChatBody, SYSTEM_PROMPT, lineDiff, diffString, modifyUserContent, audioFormat, audioContentType, audioKey, audioUrlFor, bearerOk } from "../src/lib.js";
 
 const SAMPLE = 'setcpm(120/4)\nstack(sound("bd*4"))';
 
@@ -66,6 +66,16 @@ test("SYSTEM_PROMPT carries the hard-won anti-hallucination rules", () => {
   assert.match(SYSTEM_PROMPT, /square brackets/);
   assert.match(SYSTEM_PROMPT, /setcpm/);
   assert.match(SYSTEM_PROMPT, /ONE fenced code block/);
+});
+
+test("bearerOk gates on the exact shared bearer (no token / mismatch / missing header → false)", () => {
+  assert.equal(bearerOk("Bearer s3cret", "s3cret"), true);
+  assert.equal(bearerOk("Bearer wrong", "s3cret"), false);
+  assert.equal(bearerOk("", "s3cret"), false);            // missing header
+  assert.equal(bearerOk("s3cret", "s3cret"), false);       // missing "Bearer " scheme
+  assert.equal(bearerOk("Bearer s3cret", ""), false);      // no token configured → always 401
+  assert.equal(bearerOk("Bearer s3cret", undefined), false);
+  assert.equal(bearerOk("Bearer ", ""), false);
 });
 
 test("lineDiff marks added/removed/unchanged lines (LCS)", () => {
