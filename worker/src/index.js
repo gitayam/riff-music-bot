@@ -19,6 +19,7 @@ import {
   shareUrl, extractStrudel, validateStrudel, buildChatBody, repairPrompt,
   modifyUserContent, diffString, audioFormat, audioKey, audioUrlFor, audioContentType,
 } from "./lib.js";
+import { sanitizeStrudel } from "./sanitize.js";
 import { Session } from "./session.js";
 import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec, embeddedTracks, trackById } from "./store.js";
 import { rankBySimilarity, parseEmbedding } from "./similar.js";
@@ -103,7 +104,11 @@ async function composeValid(env, initialContent, attempts) {
     }
     code = extracted;
     const err = validateStrudel(code);
-    if (err === null) return code;
+    // Sanitize AFTER the structural gate, BEFORE share/render: rewrite engine-unsupported
+    // constructs (one-arg .swingBy → .swing(4); drop .lpenv/.sometimes) so the composed code
+    // renders to audio instead of degrading to code+link. Pure + idempotent; /render's own
+    // caller-supplied code is never rewritten (validated separately, by contract).
+    if (err === null) return sanitizeStrudel(code);
     lastErr = err;
   }
   const e = new Error(`could not produce valid Strudel after ${attempts} attempts: ${lastErr}`);

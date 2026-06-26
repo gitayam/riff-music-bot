@@ -18,12 +18,17 @@
 //   bad-*   — minimal isolations of an engine-unsupported construct (lpenv/swingBy/arrow-sometimes).
 //   real-*  — real `strudel_code` rows pulled from prod D1 where audio_url was NULL.
 //
-// No network/render-path code is modified by this harness; it only spawns the existing engine.
+// It mirrors the PRODUCTION pipeline: each raw snippet is passed through the worker's
+// `sanitizeStrudel()` (the same fn the compose path applies in worker/src/index.js) BEFORE it
+// hits the engine — so the count reflects what a /riff actually renders, and a remediation unit
+// (e.g. R1.1 wiring the sanitizer) makes the failure count DROP. No render-path code is modified
+// here; it only spawns the existing engine and applies the existing pure sanitizer.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { sanitizeStrudel } from '../worker/src/sanitize.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
@@ -73,8 +78,9 @@ async function main() {
 
   for (const f of files) {
     const name = f.replace(/\.js$/, '');
-    const code = fs.readFileSync(path.join(CORPUS_DIR, f), 'utf8').trim();
-    if (!code) continue;
+    const raw = fs.readFileSync(path.join(CORPUS_DIR, f), 'utf8').trim();
+    if (!raw) continue;
+    const code = sanitizeStrudel(raw); // production pipeline: compose → sanitize → render
     total++;
     log(`  ${name} … `);
     const { ok, detail } = await renderOne(code, path.join(tmpDir, name + '.wav'));
