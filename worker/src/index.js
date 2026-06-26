@@ -18,6 +18,7 @@
 import {
   shareUrl, extractStrudel, validateStrudel, buildChatBody, repairPrompt,
   modifyUserContent, diffString, audioFormat, audioKey, audioUrlFor, audioContentType,
+  renderRepairPrompt, renderWithRepair,
 } from "./lib.js";
 import { sanitizeStrudel } from "./sanitize.js";
 import { Session } from "./session.js";
@@ -158,18 +159,29 @@ async function renderBytes(env, code, cycles, format) {
 }
 
 // P1 last mile for the HTTP API: render → store in R2 → served audio_url. BEST-EFFORT — you always get
-// the code + share link; any failure degrades to {render_error}, never throws. {} when not wanted/wired.
-async function tryRender(env, { code, cycles, format, id, requestUrl, want }) {
-  if (!want) return {};
-  if (!env.RENDER_SERVICE_URL || !env.AUDIO) return {}; // not wired (Tier-A) — no error, just no audio
-  const out = await renderBytes(env, code, cycles, format);
-  if (out.error) return { render_error: out.error };
+// the code + share link; any failure degrades to {render_error}, never throws. Always returns {code}
+// (the possibly render-repaired code) so the caller persists/links the code that actually rendered.
+// `initialContent` (the prompt/modify ask) enables R1.3 render-422 repair; omit it (e.g. /render) to
+// never rewrite caller-supplied code.
+async function tryRender(env, { code, initialContent, attempts, cycles, format, id, requestUrl, want }) {
+  if (!want) return { code };
+  if (!env.RENDER_SERVICE_URL || !env.AUDIO) return { code }; // not wired (Tier-A) — no error, just no audio
+  // Render, repairing on a render-engine 422 (feed the engine error back to the LLM + recompose,
+  // within repair_attempts). Happy path renders exactly once and leaves `code` unchanged.
+  const { code: finalCode, result: out } = await renderWithRepair({
+    code,
+    initialContent,
+    attempts,
+    render: (c) => renderBytes(env, c, cycles, format),
+    recompose: (reason, broken) => composeValid(env, renderRepairPrompt(initialContent, reason, broken), 1),
+  });
+  if (out.error) return { code: finalCode, render_error: out.error };
   try {
     const key = audioKey(id, out.fmt);
     await env.AUDIO.put(key, out.bytes, { httpMetadata: { contentType: audioContentType(out.fmt) } });
-    return { audio_url: audioUrlFor(requestUrl, key) };
+    return { code: finalCode, audio_url: audioUrlFor(requestUrl, key) };
   } catch (e) {
-    return { render_error: String(e.message || e).slice(0, 150) };
+    return { code: finalCode, render_error: String(e.message || e).slice(0, 150) };
   }
 }
 
@@ -249,10 +261,12 @@ async function handlePost(request, env, path) {
       const stub = sessionStub(env, req.session_id);
       const prev = await stub.latest();
       if (!prev) return json(404, { error: "unknown session_id — call /generate with this session_id first" });
-      const code = await composeValid(env, modifyUserContent(prev.code, req.instruction), req.repair_attempts);
-      const share = shareUrl(code);
+      const ask = modifyUserContent(prev.code, req.instruction);
+      const composed = await composeValid(env, ask, req.repair_attempts);
       const trackId = newId();
-      const rendered = await tryRender(env, { code, cycles: req.cycles, format: req.format, id: trackId, requestUrl: request.url, want: wantsRender(path, req) });
+      const rendered = await tryRender(env, { code: composed, initialContent: ask, attempts: req.repair_attempts, cycles: req.cycles, format: req.format, id: trackId, requestUrl: request.url, want: wantsRender(path, req) });
+      const code = rendered.code ?? composed; // R1.3: a render-422 repair may have rewritten the code
+      const share = shareUrl(code);
       const embedding = await tryEmbed(env, embedSource(req, code, req.instruction));
       // Persist FIRST (so the D1 row id can be stored in the DO version for parent-linking), then
       // append to the DO. Both happen only after composeValid succeeded — an invalid modify (422)
@@ -276,20 +290,20 @@ async function handlePost(request, env, path) {
       });
     }
 
-    let code;
+    let code, initialContent;
     if (path === "/generate") {
       if (!req.prompt || typeof req.prompt !== "string") return json(400, { error: "missing 'prompt'" });
+      initialContent = req.prompt; // enables R1.3 render-422 repair
       code = await composeValid(env, req.prompt, req.repair_attempts);
     } else if (path === "/render") {
       if (!req.code || typeof req.code !== "string") return json(400, { error: "missing 'code'" });
-      const err = validateStrudel(req.code); // caller's own code → never rewrite it, 422 if invalid
+      const err = validateStrudel(req.code); // caller's own code → never rewrite it (no initialContent → no repair), 422 if invalid
       if (err) return json(422, { error: "invalid Strudel", detail: err });
       code = req.code;
     } else {
       return json(404, { error: "not found" });
     }
     // Optionally start/extend a session so the result can be modified later.
-    const share = shareUrl(code);
     const source = path.slice(1); // "generate" | "render"
     let version = 1, parent_id = null, parentTrackId = null;
     if (req.session_id && typeof req.session_id === "string") {
@@ -301,7 +315,9 @@ async function handlePost(request, env, path) {
     }
     // Render to audio if wanted + wired (P1): /render renders by default, /generate on req.render===true.
     const trackId = newId();
-    const rendered = await tryRender(env, { code, cycles: req.cycles, format: req.format, id: trackId, requestUrl: request.url, want: wantsRender(path, req) });
+    const rendered = await tryRender(env, { code, initialContent, attempts: req.repair_attempts, cycles: req.cycles, format: req.format, id: trackId, requestUrl: request.url, want: wantsRender(path, req) });
+    code = rendered.code ?? code; // R1.3: render-422 repair may have rewritten it (/generate only — /render has no initialContent)
+    const share = shareUrl(code);
     const embedding = await tryEmbed(env, embedSource(req, code, null));
     // Persist to D1 (cross-session history), then record the D1 id in the session's modify chain.
     await insertTrack(env, buildTrackRow({
@@ -373,11 +389,17 @@ async function composeAndFollowup(env, interaction) {
     if (!prompt) {
       content = "Give me something to make — e.g. `/riff prompt: funky disco loop, 120bpm`.";
     } else {
-      const code = await composeValid(env, prompt, 2);
-      const share = shareUrl(code);
-      // Render the audio for Discord (best-effort — degrade to code+link if it fails/unconfigured).
+      const composed = await composeValid(env, prompt, 2);
       const id = newId();
-      const r = await renderBytes(env, code, 4, "mp3");
+      // Render for Discord (best-effort — degrade to code+link if it fails/unconfigured), repairing
+      // on a render-engine 422 (R1.3): feed the engine error back to the LLM + recompose. Happy path
+      // renders exactly once.
+      const { code, result: r } = await renderWithRepair({
+        code: composed, initialContent: prompt, attempts: 2,
+        render: (c) => renderBytes(env, c, 4, "mp3"),
+        recompose: (reason, broken) => composeValid(env, renderRepairPrompt(prompt, reason, broken), 1),
+      });
+      const share = shareUrl(code);
       let audio_url = null;
       if (r.bytes) {
         audio = r.bytes;

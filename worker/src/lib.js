@@ -84,6 +84,44 @@ export function repairPrompt(prompt, lastErr, brokenCode) {
   return `${prompt}\n\nYour previous attempt was not valid Strudel. Error: ${lastErr}\nBroken code:\n${brokenCode}\nReturn corrected, valid Strudel code only (one \`\`\`javascript block).`;
 }
 
+// R1.3 — the re-prompt when code is STRUCTURALLY valid but the offline RENDER engine 422s on it
+// (a different failure from the structural gate above): frame it as a render rejection and pin the
+// renderable subset so the model stops re-emitting the constructs the engine can't play.
+export function renderRepairPrompt(prompt, renderError, brokenCode) {
+  return `${prompt}\n\nThe previous code was valid Strudel but the offline render engine could not render it (${String(renderError).slice(0, 160)}).\nUse ONLY the supported, renderable subset — do NOT use .lpenv(), .swingBy(), or .sometimes(x=>…); use .swing(n) and mini-notation for variation.\nPrevious code:\n${(brokenCode || "").slice(0, 800)}\nReturn corrected, valid Strudel as one \`\`\`javascript block.`;
+}
+
+// True iff a render result's error denotes a 422 (the render service's "could not render" for
+// engine-invalid code) — as opposed to a transient 503 / network error, which must NOT trigger a
+// recompose (renderBytes already retries 503; recomposing on a blip would waste LLM calls).
+export function is422(error) {
+  const s = String(error && error.message != null ? error.message : error);
+  return /\b422\b/.test(s);
+}
+
+// R1.3 render-422 repair loop — PURE orchestration (no fetch / no Worker globals, so it unit-tests
+// under `node --test`; index.js injects the real render + recompose, which live behind workerd-only
+// imports). Given valid `code`, render it; on a render-engine 422, feed the engine error back to the
+// LLM and recompose, reusing the repair_attempts budget. The happy path (renders first try — the
+// common case after the R1.1 sanitizer) calls render() exactly ONCE and never recomposes. Repair is
+// skipped entirely when `initialContent` is absent (e.g. /render, whose caller-supplied code is never
+// rewritten by contract). Injected:
+//   render(code)            -> Promise<{bytes,fmt} | {error}>   (renderBytes)
+//   recompose(reason, code) -> Promise<string newCode>          (composeValid w/ renderRepairPrompt)
+// Returns { code, result } — `code` is the final (possibly repaired) code; `result` the final render.
+export async function renderWithRepair({ code, initialContent, attempts, render, recompose }) {
+  const max = Math.max(1, Math.min(4, parseInt(attempts, 10) || 2));
+  let result = await render(code);
+  for (let i = 1; i < max && result && result.error && is422(result.error) && initialContent; i++) {
+    let next;
+    try { next = await recompose(result.error, code); } catch { break; } // can't recompose → degrade to code+link
+    if (!next || typeof next !== "string") break;
+    code = next;
+    result = await render(code);
+  }
+  return { code, result };
+}
+
 // The modify ask: hand the model the current code + a NL change and get the FULL updated program back.
 // This is Situation E ("faster" / "add a bassline" / "darker") — the demo's core differentiator: we
 // edit the code, we don't re-roll a black box. The same SYSTEM_PROMPT (valid-Strudel rules) applies.
