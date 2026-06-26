@@ -6,7 +6,7 @@ verify: npm --prefix worker run dry-run
 ratchet:
   tool: "node scripts/render-corpus.mjs --json"
   metric: corpus-render-failures
-  baseline: TBD   # established by R0.1; write the number back here when R0.1 completes
+  baseline: 3   # established by R0.1 (2026-06-26): all 3 failures are one-arg .swingBy(x) — see Log
 autonomy: senior-dev
 push: branch
 deploy: manual            # live Discord bot, no single deploy.sh — loop logs "ready to deploy" at phase end, never auto-deploys
@@ -28,7 +28,7 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 ## AUTO worklist (loop executes, in order)
 
 ### Phase R0 — Foundation: render corpus + baseline (MUST be first; sets the ratchet)
-- [ ] **R0.1** Build `scripts/render-corpus.mjs` — runs each snippet in `scripts/render-corpus/*.js` through `render/strudel-render.mjs` (code on stdin, 2 cycles), prints `{total, failures, failing:[name…]}` as `--json`. Seed the corpus: ≥6 known-good loops + the known-`422` cases (`.lpenv()`, `.swingBy()`, `.sometimes(x=>x.fast(2))`), and pull a few real failing `strudel_code` rows from D1 (`wrangler d1 execute riff-tracks --remote --command "SELECT strudel_code FROM tracks WHERE audio_url IS NULL LIMIT 10"`). Run it, record the failure count, and **write it into this file's front-matter `ratchet.baseline`**. Verify: harness prints valid JSON; commit harness + corpus + baseline.
+- [x] **R0.1** Build `scripts/render-corpus.mjs` — runs each snippet in `scripts/render-corpus/*.js` through `render/strudel-render.mjs` (code on stdin, 2 cycles), prints `{total, failures, failing:[name…]}` as `--json`. Seed the corpus: ≥6 known-good loops + the known-`422` cases (`.lpenv()`, `.swingBy()`, `.sometimes(x=>x.fast(2))`), and pull a few real failing `strudel_code` rows from D1 (`wrangler d1 execute riff-tracks --remote --command "SELECT strudel_code FROM tracks WHERE audio_url IS NULL LIMIT 10"`). Run it, record the failure count, and **write it into this file's front-matter `ratchet.baseline`**. Verify: harness prints valid JSON; commit harness + corpus + baseline.
 
 ### Phase R1 — Render hit-rate (core)
 - [ ] **R1.1** Add a post-compose Strudel sanitizer `worker/src/sanitize.js` (pure fn `sanitizeStrudel(code) -> code`) that rewrites/strips engine-unsupported constructs (map/drop `.lpenv(...)`, `.swingBy(...)`→`.swing()`, unwrap `.sometimes(x=>…)` to a safe form or drop). Wire it into the compose path in `worker/src/index.js` (after `extractStrudel`/`validateStrudel`, before share/render). Add `worker/test/sanitize.test.mjs`. Re-run the ratchet — `corpus-render-failures` MUST drop. (Mirror the same fn into the render service later if it helps; keep it shared-shaped.)
@@ -54,3 +54,12 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 <!-- one line per unit:
 <YYYY-MM-DD>  <id>  files=<…>  corpus-render-failures <before>-><after>  commit <sha8>  status=DONE|BLOCKED:<reason>
 -->
+2026-06-26  R0.1  files=scripts/render-corpus.mjs,scripts/render-corpus/(README+14 snippets)  corpus-render-failures TBD->3  commit d990165d  status=DONE
+
+> **R0.1 finding (for R1.1 scope — read before sanitizing).** Baseline = **3**, all 3 failures are
+> **one-arg `.swingBy(x)`** (`bad-02-swingby`, `real-01-d1-swingby-lpenv-sometimes`,
+> `real-03-d1-swingby-lpenv`). Empirically, in the *local* engine (`@strudel/web@1.3.0`):
+> `.lpenv(...)`, arrow-`.sometimes(x=>…)`, and **two**-arg `.swingBy(x,n)` (`real-02`) all render
+> **OK** — they do NOT 422. So R1.1's single highest-value rewrite is **one-arg `.swingBy(x)` →
+> `.swingBy(x,4)`** (or `.swing()`); stripping `lpenv`/`sometimes` is not required to drop this
+> baseline (keep them harmless/idempotent if added, but the swingBy fix is what moves the ratchet).
