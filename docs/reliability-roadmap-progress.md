@@ -33,7 +33,7 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 ### Phase R1 — Render hit-rate (core)
 - [x] **R1.1** Add a post-compose Strudel sanitizer `worker/src/sanitize.js` (pure fn `sanitizeStrudel(code) -> code`) that rewrites/strips engine-unsupported constructs (map/drop `.lpenv(...)`, `.swingBy(...)`→`.swing()`, unwrap `.sometimes(x=>…)` to a safe form or drop). Wire it into the compose path in `worker/src/index.js` (after `extractStrudel`/`validateStrudel`, before share/render). Add `worker/test/sanitize.test.mjs`. Re-run the ratchet — `corpus-render-failures` MUST drop. (Mirror the same fn into the render service later if it helps; keep it shared-shaped.)
 - [x] **R1.2** Constrain the compose prompt to the supported Strudel subset: edit the system/transform guidance in `worker/src/lib.js` (`buildChatBody`) and `souls/hermes.SOUL.md`'s intent→Strudel table to forbid `.lpenv`/`.swingBy`/arrow-`.sometimes` and prefer supported equivalents. Re-run ratchet on prompt-derived corpus entries; verify dry-run.
-- [ ] **R1.3** Strengthen the 422 repair loop in `worker/src/index.js`/`lib.js` (`repairPrompt`): when the render service returns 422, include the engine error + "use only the supported subset" in the repair regeneration (within existing `repair_attempts`). Add a test that a 422-then-fix path is exercised (mock the render fetch). Verify.
+- [x] **R1.3** Strengthen the 422 repair loop in `worker/src/index.js`/`lib.js` (`repairPrompt`): when the render service returns 422, include the engine error + "use only the supported subset" in the repair regeneration (within existing `repair_attempts`). Add a test that a 422-then-fix path is exercised (mock the render fetch). Verify.
 
 ### Phase R2 — Tests + safety nets
 - [ ] **R2.1** Worker unit tests in `worker/test/`: `renderBytes` sends `Authorization: Bearer <MUSIC_API_TOKEN>` to `RENDER_SERVICE_URL`, retries on 503 (3×), and returns `{error}` not throw; `tryRender` guard (no AUDIO/URL → `{}`); discord Ed25519 verify (valid/invalid sig); bearer auth gate (no token → 401). Run `npm --prefix worker test` green.
@@ -77,3 +77,16 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 > **R1.2 note.** Prompt-side prevention (the ratchet is already at its 0 floor from R1.1, so it can't
 > drop further — R1.2 keeps it at 0 while reducing reliance on the sanitizer). SYSTEM_PROMPT and soul
 > now forbid `.lpenv`/`.swingBy`/arrow-`.sometimes` and prefer `.swing(n)` + mini-notation/`.every`.
+
+2026-06-26  R1.3  files=worker/src/lib.js,worker/src/index.js,worker/test/repair.test.mjs  corpus-render-failures 0->0  commit 523ad674  status=DONE
+
+> **R1.3 note.** Render-engine 422 repair: structurally-valid code that the engine 422s on is fed back
+> to the LLM (engine error + supported-subset rules) and recomposed within repair_attempts, then
+> re-rendered. Pure loop (`renderWithRepair`/`renderRepairPrompt`/`is422`) in lib.js so it tests under
+> node; wired into tryRender (/generate + /modify) and the Discord follow-up. Happy path renders once;
+> /render caller code never rewritten; 503/network never recomposes. Worker test 54→63.
+
+> **▶ PHASE R1 COMPLETE — READY TO DEPLOY (manual).** R1.1+R1.2+R1.3 shipped; render-corpus-failures
+> 3→0; worker test 63 green; dry-run clean. Deploy is MANUAL (do NOT auto-deploy the live bot):
+> `cd worker && npx wrangler@4.103.0 deploy`. The Proxmox render service is unchanged by this phase
+> (no `render/` edits), so no container rebuild is needed. Verify after: `curl <verify_url>`.
