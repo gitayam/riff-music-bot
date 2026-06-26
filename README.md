@@ -23,9 +23,11 @@ It replies with the Strudel code + a strudel.cc play link, and a few seconds lat
 🎙️ **voice message** of the track. Try follow-ups — *"darker, add a bassline"*,
 *"give me 3 variations"* — or **`@zeromusicbot help`** for the menu.
 
-> ⏳ **Temporary demo:** the bot runs on a laptop for the Sundai hackathon — it may be
-> **offline** at times and is **not** a 24/7 service. If it doesn't answer, it's simply not
-> running right now (the code here is fully self-hostable — see Quickstart).
+> ▶ **Now hosted off-laptop (2026-06):** the bot moved from the hackathon laptop to a small
+> always-on stack — a **Cloudflare Worker** (`riff-music-api`) for compose/orchestration and a
+> **self-hosted Proxmox** box for the audio renderer + agent (see *Production topology* below). The
+> Quickstart / launchd setup here still works for **self-hosting** on a Mac. If the bot doesn't
+> answer it's a transient outage, not "the laptop is closed."
 
 ## What the bot does — "Riff", the music director
 
@@ -49,6 +51,27 @@ The music brain is `souls/hermes.SOUL.md` (synced into the agent workspace by `r
 launch); the full cited theory + per-genre Strudel recipes are in
 [`docs/music-theory-for-zeroclaw.md`](docs/music-theory-for-zeroclaw.md). Project plan:
 [`docs/sundai-zeroclaw-music-roadmap.md`](docs/sundai-zeroclaw-music-roadmap.md).
+
+## Production topology (2026-06) — hosted off-laptop
+
+The hackathon demo is now a small always-on stack; the laptop is no longer in the request path.
+(The Quickstart / launchd setup below still works for **self-hosting** on a Mac.)
+
+- **Cloudflare Worker `riff-music-api`** (`worker/`) — the edge orchestrator: prompt → gpt-5.4 →
+  validated Strudel → `strudel.cc` link, the Discord interactions webhook, cross-session history (D1),
+  rendered audio (R2), and a per-session modify chain (Durable Object). `GET /health` is live; deploy
+  with `cd worker && npx wrangler@4.103.0 deploy`.
+- **Render service on Proxmox** (`container/server.mjs`) — headless-Chromium + ffmpeg, called by the
+  Worker over a Cloudflare tunnel, bearer-gated on `/render` (open `/health`). It wraps the *same*
+  faithful engine (`render/strudel-render.mjs`) used locally. Moved off Cloudflare Containers to cut idle compute.
+- **hermes + strudel-watch on Proxmox** (systemd `zeroclaw-hermes` / `zeroclaw-strudel-watch`) — the
+  Discord @mention agent and the 🎙️ voice-message delivery watcher, migrated off the Mac launchd services.
+- **Render-reliability ratchet** (`scripts/render-corpus.mjs`) — runs a seeded corpus through the real
+  offline engine and reports `corpus-render-failures`; a post-compose sanitizer (`worker/src/sanitize.js`),
+  a tightened compose prompt, and a render-422 repair loop took that count to 0. See
+  [`docs/reliability-roadmap.md`](docs/reliability-roadmap.md).
+
+One line: **Discord → CF Worker (compose) → Proxmox render (audio) → R2 / Discord** — laptop out of the path.
 
 ## Quickstart (from a fresh clone · macOS / Apple Silicon)
 

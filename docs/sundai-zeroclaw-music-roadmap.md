@@ -30,6 +30,32 @@ The wow combo: **Strudel writes the controllable skeleton → Stable Audio rende
 
 ---
 
+## ▶ Production (2026-06) — current state
+
+> **Append-only note.** This block records where the system actually runs *now*, after the
+> hackathon. Everything below it (the original plan, architecture, and `[x]` history) is preserved
+> verbatim — nothing here unchecks or rewrites it.
+
+The demo grew up and moved **off the laptop** into a small always-on stack:
+
+- **Edge Worker `riff-music-api` on Cloudflare** (`worker/`) — orchestration: prompt → gpt-5.4 →
+  validated Strudel → share link, the Discord interactions webhook, D1 history, R2 audio, and a
+  per-session modify chain (Durable Object). `GET /health` live; deploy `cd worker && npx wrangler@4.103.0 deploy`.
+- **Render service self-hosted on Proxmox** (`container/server.mjs`) — the headless-Chromium + ffmpeg
+  renderer the Worker calls over a Cloudflare tunnel (`riff-render.*`), bearer-gated on `/render`
+  (open `/health`). Wraps the same `render/strudel-render.mjs` engine; moved off Cloudflare Containers
+  to cut idle compute.
+- **hermes + strudel-watch on Proxmox** (systemd `zeroclaw-hermes` / `zeroclaw-strudel-watch`) — the
+  Discord @mention agent and the voice-message delivery watcher, migrated off the Mac launchd services.
+- **Render-reliability ratchet** (`scripts/render-corpus.mjs`) — a seeded Strudel corpus run through
+  the real offline engine, reporting `corpus-render-failures`. A post-compose sanitizer
+  (`worker/src/sanitize.js`) + a tightened compose prompt + a render-422 repair loop drove that count
+  to **0**. Plan + progress: `docs/reliability-roadmap.md` and `docs/reliability-roadmap-progress.md`.
+
+Topology in one line: **Discord → CF Worker (compose) → Proxmox render (audio) → R2 / Discord**, laptop out of the path.
+
+---
+
 ## Architecture (whiteboard → ZeroClaw primitives)
 
 ```
