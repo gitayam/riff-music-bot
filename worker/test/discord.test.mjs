@@ -3,7 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  hexToBytes, verifyInteractionSignature, commandPrompt, interactionSessionId, followupUrl, followupContent, T,
+  hexToBytes, verifyInteractionSignature, commandPrompt, interactionSessionId, followupUrl,
+  followupEmbed, emptyPromptMessage, composeErrorMessage, RIFF_COLOR, T,
 } from "../src/discord.js";
 
 const bytesToHex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -56,14 +57,51 @@ test("followupUrl targets the @original message via the interaction token", () =
   assert.equal(followupUrl("https://x/", "a", "t"), "https://x/webhooks/a/t/messages/@original"); // trailing slash trimmed
 });
 
-test("followupContent inlines code when small, drops to link-only when it would exceed 2000", () => {
-  const small = followupContent("disco", 'stack(sound("bd*4"))', "https://strudel.cc/#x");
-  assert.match(small, /```javascript/);
-  assert.match(small, /▶ https:\/\/strudel\.cc\/#x/);
-  const big = followupContent("epic", "x".repeat(3000), "https://strudel.cc/#y");
-  assert.ok(big.length <= 2000);
-  assert.ok(!big.includes("```"), "oversized code must be dropped, not inlined");
-  assert.match(big, /strudel\.cc\/#y/);
+test("followupEmbed: masked play link (no raw URL dumped), inline code, title, color, remix footer", () => {
+  const e = followupEmbed("disco", 'stack(sound("bd*4"))', "https://strudel.cc/#x");
+  assert.match(e.title, /🎶 disco/);
+  assert.match(e.description, /\[▶ Play on strudel\.cc\]\(https:\/\/strudel\.cc\/#x\)/); // masked, not bare
+  assert.match(e.description, /```js/);
+  assert.match(e.description, /stack\(sound\("bd\*4"\)\)/);
+  assert.equal(e.color, RIFF_COLOR);
+  assert.match(e.footer.text, /darker/);
+  assert.match(e.footer.text, /variations/);
+});
+
+test("followupEmbed: huge song drops inline code (description stays <= 4096), keeps the play link", () => {
+  const e = followupEmbed("epic", "x".repeat(5000), "https://strudel.cc/#y");
+  assert.ok(e.description.length <= 4096, "within Discord's embed description cap");
+  assert.ok(!e.description.includes("```"), "oversized code must be dropped, not inlined");
+  assert.match(e.description, /strudel\.cc\/#y/);
+  assert.match(e.description, /code is long/);
+});
+
+test("followupEmbed: hasAudio:false adds the render-miss note; true omits it", () => {
+  const miss = followupEmbed("d", 'sound("bd")', "https://strudel.cc/#z", { hasAudio: false });
+  assert.match(miss.description, /Audio didn't render/);
+  const hit = followupEmbed("d", 'sound("bd")', "https://strudel.cc/#z", { hasAudio: true });
+  assert.ok(!hit.description.includes("Audio didn't render"));
+});
+
+test("followupEmbed: long prompt is truncated to the 256-char title cap", () => {
+  const e = followupEmbed("p".repeat(400), 'sound("bd")', "https://strudel.cc/#z");
+  assert.ok(e.title.length <= 256);
+  assert.match(e.title, /…$/);
+});
+
+test("emptyPromptMessage nudges with examples + the remix hint", () => {
+  const m = emptyPromptMessage();
+  assert.match(m, /\/riff/);
+  assert.match(m, /lofi|disco|fanfare/);
+  assert.match(m, /variations/);
+});
+
+test("composeErrorMessage is human, tailored by status, and never leaks internals", () => {
+  assert.match(composeErrorMessage({ status: 504 }), /too long/);
+  assert.match(composeErrorMessage({ status: 502 }), /unavailable/);
+  const generic = composeErrorMessage(new Error("could not produce valid Strudel after 2 attempts: foo"));
+  assert.match(generic, /rephrasing|genre|mood|tempo/);
+  assert.ok(!generic.includes("could not produce valid Strudel"), "must not leak the raw error");
 });
 
 test("type constants match the Discord API", () => {

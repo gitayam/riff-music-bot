@@ -26,7 +26,8 @@ import { Session } from "./session.js";
 import { insertTrack, recentTracks, pruneTracks, buildTrackRow, newId, nowSec, embeddedTracks, trackById } from "./store.js";
 import { rankBySimilarity, parseEmbedding } from "./similar.js";
 import {
-  T, verifyInteractionSignature, commandPrompt, interactionSessionId, followupUrl, followupContent,
+  T, verifyInteractionSignature, commandPrompt, interactionSessionId, followupUrl,
+  followupEmbed, emptyPromptMessage, composeErrorMessage,
 } from "./discord.js";
 
 export { Session }; // the runtime needs the DO class exported from the entry module
@@ -335,15 +336,15 @@ async function handleDiscordInteraction(request, env, ctx) {
 
 // Edit the deferred @original message — with the rendered audio attached (multipart) when we have it,
 // else plain text. Discord plays an mp3 attachment inline, so this is "real audio in Discord".
-async function patchFollowup(url, content, audio) {
+async function patchFollowup(url, payload, audio) {
   let init;
   if (audio) {
     const form = new FormData();
-    form.append("payload_json", JSON.stringify({ content, attachments: [{ id: 0, filename: "riff.mp3" }] }));
+    form.append("payload_json", JSON.stringify({ ...payload, attachments: [{ id: 0, filename: "riff.mp3" }] }));
     form.append("files[0]", new Blob([audio], { type: "audio/mpeg" }), "riff.mp3");
     init = { method: "PATCH", body: form }; // fetch sets multipart Content-Type + boundary
   } else {
-    init = { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) };
+    init = { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
   }
   await fetch(url, init);
 }
@@ -352,10 +353,10 @@ async function patchFollowup(url, content, audio) {
 async function composeAndFollowup(env, interaction) {
   const url = followupUrl(env.DISCORD_API_BASE, interaction.application_id, interaction.token);
   const prompt = commandPrompt(interaction);
-  let content, audio = null;
+  let payload, audio = null;
   try {
     if (!prompt) {
-      content = "Give me something to make — e.g. `/riff prompt: funky disco loop, 120bpm`.";
+      payload = { content: emptyPromptMessage() };
     } else {
       const composed = await composeValid(env, prompt, 2);
       const id = newId();
@@ -386,14 +387,15 @@ async function composeAndFollowup(env, interaction) {
         session_id: interactionSessionId(interaction), prompt, source: "discord",
         strudel_code: code, share_url: share, audio_url, version: 1,
       }, id));
-      content = followupContent(prompt, code, share);
+      payload = { embeds: [followupEmbed(prompt, code, share, { hasAudio: !!audio })] };
     }
   } catch (e) {
-    content = `Couldn't compose that: ${String(e.message || e).slice(0, 150)}`;
+    console.log("discord compose failed:", String((e && e.stack) || (e && e.message) || e)); // raw stays server-side
+    payload = { content: composeErrorMessage(e) };
     audio = null;
   }
   try {
-    await patchFollowup(url, content, audio);
+    await patchFollowup(url, payload, audio);
   } catch (e) {
     console.log("discord followup failed:", e.message);
   }
