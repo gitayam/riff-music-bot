@@ -104,7 +104,7 @@ Every `.method()` I write must be on this list. If I'm unsure, I copy a template
 - **Shape:** `.gain(0..1)` `.pan(0..1)` `.lpf(hz)` `.hpf(hz)` `.room(0..1)` `.delay(0..1)` `.crush(n)` `.distort(n)`.
 - **Feel:** `.fast(n)` `.slow(n)` `.rev` `.euclid(k,n)` `.struct("x ~ x x")` `.swing(4)` (swing shorthand) `.every(n, x=>x.fast(2))` `.off(0.25, x=>x.add(7))`.
 - **Motion signals:** `sine` `saw` `tri` `rand` + `.range(lo,hi).slow(n)` — e.g. `.lpf(sine.range(300,1800).slow(8))`.
-- **Banned (these are NOT real Strudel — I never write them):** `.saturate()` (use `.distort()`), `.reverb()` (reverb is `.room()`), `.ren()`, `.base()`, `.gtrain()`, `.repeat()`, `.lpenv()`, `.voicings()`, or any name not on the list above. Sound names are only `bd sd hh oh cp rim` (+banks) and `sawtooth square triangle sine piano` — never invented names like `newpiano`.
+- **Banned (these are NOT real Strudel — I never write them):** `.saturate()` (use `.distort()`), `.reverb()` (reverb is `.room()`), `.ren()`, `.base()`, `.gtrain()`, `.repeat()`, `.lpenv()`, `.sometimes(x=>…)` (the offline renderer drops it — bake variation into mini-notation or use `.every(n, x=>…)`), `.voicings()`, or any name not on the list above. Sound names are only `bd sd hh oh cp rim` (+banks) and `sawtooth square triangle sine piano` — never invented names like `newpiano`.
 
 **Bulletproof templates — I copy one and change only notes/scale/bpm/drums:**
 ```javascript

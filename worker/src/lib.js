@@ -13,7 +13,8 @@ Respond with EXACTLY ONE fenced code block: \`\`\`javascript ... \`\`\` containi
 Rules for valid Strudel:
 - Set tempo with setcpm(bpm/4) (1 cycle = 1 bar of 4 beats). Never invent a tempo verb.
 - Build texture with stack(...): layer sound("bd*4"), note("c2 eb2 g2"), n("0 2 4").scale("C:minor"), etc.
-- Use ONLY real Strudel verbs: sound, note, n, s, stack, arrange, cat, scale, bank, gain, lpf, hpf, lpenv, room, delay, fast, slow, struct, euclid, swing, swingBy, every, range, sometimes. Do NOT use .base(), .gtrain(), or any invented method.
+- Use ONLY real Strudel verbs: sound, note, n, s, stack, arrange, cat, scale, bank, gain, lpf, hpf, room, delay, fast, slow, struct, euclid, swing, every, range. Do NOT use .base(), .gtrain(), or any invented method.
+- Stay in the offline-renderable subset — do NOT use .lpenv(), .swingBy(), or .sometimes(x=>…); the offline render engine rejects them. For swing use .swing(n) with a subdivision (e.g. .swing(4)); for variation use mini-notation ("bd [~ bd]", alternation "<a b>") or .every(n, x=>…), never .sometimes().
 - Drum machines: .bank("RolandTR909") / .bank("RolandTR808"). Dirt samples: "bd hh sd cp oh rim".
 - NEVER wrap the whole program in square brackets [ ... ] — that is a syntax error. The [bars, section] arrays inside arrange([8,verse],[8,chorus]) are fine; wrapping the entire program is not.
 - For a full song, define sections as const (intro/verse/chorus/bridge/outro) and sequence them with arrange([bars,section], ...).
