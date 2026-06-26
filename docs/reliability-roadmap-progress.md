@@ -40,7 +40,7 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 - [x] **R2.2** Add `scripts/health-check.sh` + `deploy/riff-health.service` + `deploy/riff-health.timer` (in-repo only, NOT installed): checks `systemctl is-active zeroclaw-hermes`, strudel-watch heartbeat age, `riff-render /health`, Worker `/health`; on any failure `curl -d` to ntfy (topic via env, default ntfy.alfaren.xyz). Verify the script runs locally against the live endpoints (read-only). Installing it on Proxmox is **D2** (decision).
 
 ### Phase R3 — Docs
-- [ ] **R3.1** Refresh `README.md` + add a "Production (2026-06)" current-state block to `docs/sundai-zeroclaw-music-roadmap.md`: Worker-on-CF + Proxmox (hermes/strudel-watch/riff-render) topology, the off-laptop migration, and the render-corpus ratchet. Do NOT uncheck/rewrite the sundai roadmap's existing `[x]`/history — append only.
+- [x] **R3.1** Refresh `README.md` + add a "Production (2026-06)" current-state block to `docs/sundai-zeroclaw-music-roadmap.md`: Worker-on-CF + Proxmox (hermes/strudel-watch/riff-render) topology, the off-laptop migration, and the render-corpus ratchet. Do NOT uncheck/rewrite the sundai roadmap's existing `[x]`/history — append only.
 
 ## DECISION units (senior-dev decides if REVERSIBLE; else returns ESCALATE — do NOT guess)
 - [!] **D1** Add *native* engine support for `.lpenv`/`.swingBy`/`.sometimes` in `render/strudel-render.mjs` + `render.html` (vs sanitizing them away in R1.1). _Reversible (additive) — senior-dev may decide. Question: is supporting these worth the engine complexity, or is restrict-to-subset (R1.1/R1.2) sufficient? Must keep the offline guarantee._
@@ -114,3 +114,16 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 > The only deployable code in R2 is R2.1's behavior-preserving `renderBytes`/`bearerOk` extraction:
 > `cd worker && npx wrangler@4.103.0 deploy`. R2.2's health-check + systemd units are repo-only —
 > **installing them on Proxmox is decision unit D2 (do NOT auto-install).**
+
+2026-06-26  R3.1  files=README.md,docs/sundai-zeroclaw-music-roadmap.md  corpus-render-failures 0->0  commit dcdb4739  status=DONE
+
+> **R3.1 note.** Docs only. README: stale "temporary laptop demo" banner replaced + new "Production
+> topology (2026-06)" section (CF Worker + Proxmox render/hermes/strudel-watch + the ratchet); self-host
+> path kept. sundai roadmap: append-only current-state block (0 lines removed — history untouched).
+
+> **▶ PHASE R3 COMPLETE — ALL AUTO UNITS DONE.** Docs-only phase — nothing to deploy. Whole-roadmap
+> deploy status: the worker changes from Phases R1+R2 are ready to ship (manual:
+> `cd worker && npx wrangler@4.103.0 deploy`); `render/` was never touched (offline guarantee intact),
+> so no Proxmox container rebuild. Remaining work = DECISION units only: **D1** (next — senior-dev:
+> native engine support vs the R1.1 sanitizer), **D2** + **D3** (ESCALATE by nature — prod host / main
+> force-push). Ratchet: baseline 3 → **0**.
