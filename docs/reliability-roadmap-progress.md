@@ -31,7 +31,7 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 - [x] **R0.1** Build `scripts/render-corpus.mjs` — runs each snippet in `scripts/render-corpus/*.js` through `render/strudel-render.mjs` (code on stdin, 2 cycles), prints `{total, failures, failing:[name…]}` as `--json`. Seed the corpus: ≥6 known-good loops + the known-`422` cases (`.lpenv()`, `.swingBy()`, `.sometimes(x=>x.fast(2))`), and pull a few real failing `strudel_code` rows from D1 (`wrangler d1 execute riff-tracks --remote --command "SELECT strudel_code FROM tracks WHERE audio_url IS NULL LIMIT 10"`). Run it, record the failure count, and **write it into this file's front-matter `ratchet.baseline`**. Verify: harness prints valid JSON; commit harness + corpus + baseline.
 
 ### Phase R1 — Render hit-rate (core)
-- [ ] **R1.1** Add a post-compose Strudel sanitizer `worker/src/sanitize.js` (pure fn `sanitizeStrudel(code) -> code`) that rewrites/strips engine-unsupported constructs (map/drop `.lpenv(...)`, `.swingBy(...)`→`.swing()`, unwrap `.sometimes(x=>…)` to a safe form or drop). Wire it into the compose path in `worker/src/index.js` (after `extractStrudel`/`validateStrudel`, before share/render). Add `worker/test/sanitize.test.mjs`. Re-run the ratchet — `corpus-render-failures` MUST drop. (Mirror the same fn into the render service later if it helps; keep it shared-shaped.)
+- [x] **R1.1** Add a post-compose Strudel sanitizer `worker/src/sanitize.js` (pure fn `sanitizeStrudel(code) -> code`) that rewrites/strips engine-unsupported constructs (map/drop `.lpenv(...)`, `.swingBy(...)`→`.swing()`, unwrap `.sometimes(x=>…)` to a safe form or drop). Wire it into the compose path in `worker/src/index.js` (after `extractStrudel`/`validateStrudel`, before share/render). Add `worker/test/sanitize.test.mjs`. Re-run the ratchet — `corpus-render-failures` MUST drop. (Mirror the same fn into the render service later if it helps; keep it shared-shaped.)
 - [ ] **R1.2** Constrain the compose prompt to the supported Strudel subset: edit the system/transform guidance in `worker/src/lib.js` (`buildChatBody`) and `souls/hermes.SOUL.md`'s intent→Strudel table to forbid `.lpenv`/`.swingBy`/arrow-`.sometimes` and prefer supported equivalents. Re-run ratchet on prompt-derived corpus entries; verify dry-run.
 - [ ] **R1.3** Strengthen the 422 repair loop in `worker/src/index.js`/`lib.js` (`repairPrompt`): when the render service returns 422, include the engine error + "use only the supported subset" in the repair regeneration (within existing `repair_attempts`). Add a test that a 422-then-fix path is exercised (mock the render fetch). Verify.
 
@@ -63,3 +63,11 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 > **OK** — they do NOT 422. So R1.1's single highest-value rewrite is **one-arg `.swingBy(x)` →
 > `.swingBy(x,4)`** (or `.swing()`); stripping `lpenv`/`sometimes` is not required to drop this
 > baseline (keep them harmless/idempotent if added, but the swingBy fix is what moves the ratchet).
+
+2026-06-26  R1.1  files=worker/src/sanitize.js,worker/src/index.js,worker/test/sanitize.test.mjs,scripts/render-corpus.mjs  corpus-render-failures 3->0  commit 1323ee55  status=DONE
+
+> **R1.1 note.** `sanitizeStrudel` wired into `composeValid()` (covers /generate, /modify, Discord;
+> NOT /render's caller code). The ratchet harness (`scripts/render-corpus.mjs`) was also updated to
+> apply the sanitizer before rendering — this is **required** by R1.1's own "ratchet MUST drop"
+> criterion (the metric now measures the real compose→sanitize→render pipeline, not raw model
+> output). Reversible code change on-branch; flagged here for transparency. Worker test 45→54 green.
