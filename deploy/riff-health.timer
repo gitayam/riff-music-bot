@@ -1,0 +1,13 @@
+# riff-health.timer — periodic trigger for riff-health.service (R2.2).
+# IN-REPO ONLY — NOT installed (install is decision unit D2). Every 5 minutes after boot.
+[Unit]
+Description=Run the Riff stack health check periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

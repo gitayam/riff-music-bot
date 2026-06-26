@@ -1,0 +1,21 @@
+# riff-health.service — systemd oneshot that runs scripts/health-check.sh (R2.2).
+# IN-REPO ONLY — NOT installed. Installing on the Proxmox host (paths, EnvironmentFile, a real ntfy
+# topic, `systemctl enable --now riff-health.timer`) is decision unit D2.
+#
+# Install (D2, for reference):
+#   sudo cp deploy/riff-health.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now riff-health.timer
+[Unit]
+Description=Riff stack health check (hermes, strudel-watch, riff-render, Worker) → ntfy on failure
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Point these at the repo checkout on the host (adjust at install time — D2).
+WorkingDirectory=/opt/zeroclaw
+ExecStart=/usr/bin/env bash /opt/zeroclaw/scripts/health-check.sh
+# Host-specific overrides (NTFY_TOPIC, service names, endpoints) belong in an EnvironmentFile set up
+# at install — keep secrets/topics out of the repo:
+# EnvironmentFile=-/etc/riff-health.env
+Nice=10
