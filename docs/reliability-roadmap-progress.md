@@ -32,7 +32,7 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 
 ### Phase R1 — Render hit-rate (core)
 - [x] **R1.1** Add a post-compose Strudel sanitizer `worker/src/sanitize.js` (pure fn `sanitizeStrudel(code) -> code`) that rewrites/strips engine-unsupported constructs (map/drop `.lpenv(...)`, `.swingBy(...)`→`.swing()`, unwrap `.sometimes(x=>…)` to a safe form or drop). Wire it into the compose path in `worker/src/index.js` (after `extractStrudel`/`validateStrudel`, before share/render). Add `worker/test/sanitize.test.mjs`. Re-run the ratchet — `corpus-render-failures` MUST drop. (Mirror the same fn into the render service later if it helps; keep it shared-shaped.)
-- [ ] **R1.2** Constrain the compose prompt to the supported Strudel subset: edit the system/transform guidance in `worker/src/lib.js` (`buildChatBody`) and `souls/hermes.SOUL.md`'s intent→Strudel table to forbid `.lpenv`/`.swingBy`/arrow-`.sometimes` and prefer supported equivalents. Re-run ratchet on prompt-derived corpus entries; verify dry-run.
+- [x] **R1.2** Constrain the compose prompt to the supported Strudel subset: edit the system/transform guidance in `worker/src/lib.js` (`buildChatBody`) and `souls/hermes.SOUL.md`'s intent→Strudel table to forbid `.lpenv`/`.swingBy`/arrow-`.sometimes` and prefer supported equivalents. Re-run ratchet on prompt-derived corpus entries; verify dry-run.
 - [ ] **R1.3** Strengthen the 422 repair loop in `worker/src/index.js`/`lib.js` (`repairPrompt`): when the render service returns 422, include the engine error + "use only the supported subset" in the repair regeneration (within existing `repair_attempts`). Add a test that a 422-then-fix path is exercised (mock the render fetch). Verify.
 
 ### Phase R2 — Tests + safety nets
@@ -71,3 +71,9 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 > apply the sanitizer before rendering — this is **required** by R1.1's own "ratchet MUST drop"
 > criterion (the metric now measures the real compose→sanitize→render pipeline, not raw model
 > output). Reversible code change on-branch; flagged here for transparency. Worker test 45→54 green.
+
+2026-06-26  R1.2  files=worker/src/lib.js,souls/hermes.SOUL.md  corpus-render-failures 0->0  commit 7940cd52  status=DONE
+
+> **R1.2 note.** Prompt-side prevention (the ratchet is already at its 0 floor from R1.1, so it can't
+> drop further — R1.2 keeps it at 0 while reducing reliance on the sanitizer). SYSTEM_PROMPT and soul
+> now forbid `.lpenv`/`.swingBy`/arrow-`.sometimes` and prefer `.swing(n)` + mini-notation/`.every`.
