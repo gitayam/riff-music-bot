@@ -43,12 +43,13 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 - [x] **R3.1** Refresh `README.md` + add a "Production (2026-06)" current-state block to `docs/sundai-zeroclaw-music-roadmap.md`: Worker-on-CF + Proxmox (hermes/strudel-watch/riff-render) topology, the off-laptop migration, and the render-corpus ratchet. Do NOT uncheck/rewrite the sundai roadmap's existing `[x]`/history — append only.
 
 ## DECISION units (senior-dev decides if REVERSIBLE; else returns ESCALATE — do NOT guess)
-- [!] **D1** Add *native* engine support for `.lpenv`/`.swingBy`/`.sometimes` in `render/strudel-render.mjs` + `render.html` (vs sanitizing them away in R1.1). _Reversible (additive) — senior-dev may decide. Question: is supporting these worth the engine complexity, or is restrict-to-subset (R1.1/R1.2) sufficient? Must keep the offline guarantee._
+- [x] **D1** Add *native* engine support for `.lpenv`/`.swingBy`/`.sometimes` in `render/strudel-render.mjs` + `render.html` (vs sanitizing them away in R1.1). _**DECIDED (senior-dev): subset is sufficient — NO native engine support.** Empirically only one-arg `.swingBy(x)` ever 422'd; `.lpenv`/arrow-`.sometimes`/two-arg `.swingBy(x,n)` already render (corpus `real-02`), and the R1.1 sanitizer takes the ratchet 3→0 — engine changes would recover nothing and risk the offline guarantee. See Decisions log._
 - [!] **D2** Install the R2.2 health-check on Proxmox (host systemd timer + a real ntfy topic). _Outward-facing, touches the production host → ESCALATE with the exact unit/timer to install._
 - [!] **D3** Split the bundled `ai-coding-env` commit `3d0d95a` (it swept in pre-staged `_archived-obelisk` renames). _Requires force-push to `main` — irreversible history rewrite → ESCALATE; recommend leaving as-is (pure renames, harmless)._
 
 ## Decisions log (senior-dev appends ADR-style rationale here)
 <!-- <date> <id> DECIDED: <choice> — rationale … — reversible: yes/no — by: senior-dev -->
+2026-06-26  D1  DECIDED: subset sufficient — keep the R1.1 sanitizer + R1.2 prompt; NO native engine support in render/. Empirically only one-arg `.swingBy(x)` ever 422'd (`.lpenv`/arrow-`.sometimes`/two-arg `.swingBy(x,n)` already render — passing corpus case `real-02`); the sanitizer takes corpus-render-failures 3→0, so engine changes recover nothing and would risk the offline guarantee (the vendored same-origin `@strudel/web@1.3.0` bundle). Guarded: sanitizer defensively strips `.lpenv`/`.sometimes` and the ratchet catches any future 422 before merge. — reversible: yes — by: senior-dev
 
 ## Log
 <!-- one line per unit:
