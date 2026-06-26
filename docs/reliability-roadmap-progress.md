@@ -37,7 +37,7 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 
 ### Phase R2 — Tests + safety nets
 - [x] **R2.1** Worker unit tests in `worker/test/`: `renderBytes` sends `Authorization: Bearer <MUSIC_API_TOKEN>` to `RENDER_SERVICE_URL`, retries on 503 (3×), and returns `{error}` not throw; `tryRender` guard (no AUDIO/URL → `{}`); discord Ed25519 verify (valid/invalid sig); bearer auth gate (no token → 401). Run `npm --prefix worker test` green.
-- [ ] **R2.2** Add `scripts/health-check.sh` + `deploy/riff-health.service` + `deploy/riff-health.timer` (in-repo only, NOT installed): checks `systemctl is-active zeroclaw-hermes`, strudel-watch heartbeat age, `riff-render /health`, Worker `/health`; on any failure `curl -d` to ntfy (topic via env, default ntfy.alfaren.xyz). Verify the script runs locally against the live endpoints (read-only). Installing it on Proxmox is **D2** (decision).
+- [x] **R2.2** Add `scripts/health-check.sh` + `deploy/riff-health.service` + `deploy/riff-health.timer` (in-repo only, NOT installed): checks `systemctl is-active zeroclaw-hermes`, strudel-watch heartbeat age, `riff-render /health`, Worker `/health`; on any failure `curl -d` to ntfy (topic via env, default ntfy.alfaren.xyz). Verify the script runs locally against the live endpoints (read-only). Installing it on Proxmox is **D2** (decision).
 
 ### Phase R3 — Docs
 - [ ] **R3.1** Refresh `README.md` + add a "Production (2026-06)" current-state block to `docs/sundai-zeroclaw-music-roadmap.md`: Worker-on-CF + Proxmox (hermes/strudel-watch/riff-render) topology, the off-laptop migration, and the render-corpus ratchet. Do NOT uncheck/rewrite the sundai roadmap's existing `[x]`/history — append only.
@@ -101,3 +101,16 @@ next** and writes back after each unit. Plan/rationale lives in `reliability-roa
 > depends on composeValid/callOpenAI, also workerd-bound); its guard CONDITION is now tested via
 > audioWired, and its 422-repair via repair.test.mjs (R1.3) — a full handlePost integration test
 > would need a workerd test pool (out of scope). Worker test 63→73.
+
+2026-06-26  R2.2  files=scripts/health-check.sh,deploy/riff-health.service,deploy/riff-health.timer  corpus-render-failures 0->0  commit 9f4e1841  status=DONE
+
+> **R2.2 note.** In-repo only (NOT installed — install is D2). health-check.sh probes hermes
+> (systemctl), strudel-watch heartbeat age, riff-render /health, Worker /health → ntfy on failure;
+> portable across the Linux host and a Mac (stat -c/-f fallback, off-target checks SKIP). Verified
+> read-only via --dry-run: all-pass exit 0 (no POST) and the failure branch (would-POST, exit 1, no
+> POST); shellcheck clean.
+
+> **▶ PHASE R2 COMPLETE — READY TO DEPLOY (manual).** Worker test 73 green; dry-run clean; ratchet 0.
+> The only deployable code in R2 is R2.1's behavior-preserving `renderBytes`/`bearerOk` extraction:
+> `cd worker && npx wrangler@4.103.0 deploy`. R2.2's health-check + systemd units are repo-only —
+> **installing them on Proxmox is decision unit D2 (do NOT auto-install).**
